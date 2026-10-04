@@ -1,0 +1,16 @@
+# local tools (JDK, BepInEx) downloaded by the scripts
+.tools/
+# build outputs
+dist/
+forest/bin/
+forest/obj/
+fabric/.gradle/
+fabric/build/
+fabric/run/
+fabric/out/
+# IDE
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo

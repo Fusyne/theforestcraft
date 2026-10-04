@@ -1,0 +1,35 @@
+{
+	"required": true,
+	"package": "dev.forestcraft.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"mixins": [
+		"BlockCollisionsMixin",
+		"BlockPlaceContextMixin",
+		"ClipContextMixin",
+		"ServerPlayerMixin",
+		"VoidChunkMixin"
+	],
+	"client": [
+		"BlockEntityRenderDispatcherMixin",
+		"CameraMixin",
+		"ChunkSectionsToRenderMixin",
+		"ClientLevelMixin",
+		"EntityRenderDispatcherMixin",
+		"GameRendererMixin",
+		"HudMixin",
+		"ItemStackRenderStateAccessor",
+		"KeyboardHandlerInvoker",
+		"KeyboardInputMixin",
+		"LayerRenderStateAccessor",
+		"LevelRendererMixin",
+		"LocalPlayerMixin",
+		"MinecraftMixin",
+		"MouseHandlerInvoker",
+		"MouseHandlerMixin",
+		"SkyMixin",
+		"WindowMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

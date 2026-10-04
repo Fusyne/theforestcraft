@@ -1,0 +1,18 @@
+{
+	"schemaVersion": 1,
+	"id": "forestcraft",
+	"version": "${version}",
+	"name": "ForestCraft",
+	"description": "Minecraft physics inside The Forest. The Forest plugin is the other half.",
+	"authors": ["ForestCraft"],
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["dev.forestcraft.ForestCraftClient"]
+	},
+	"mixins": ["forestcraft.mixins.json"],
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "26.2"
+	}
+}
