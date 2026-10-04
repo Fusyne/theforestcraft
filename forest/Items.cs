@@ -127,11 +127,42 @@ namespace ForestCraft
             if (cube == null) Build();
             float k = Link.Scale;
             int x = Link.ReadMcInt(136), y = Link.ReadMcInt(140), z = Link.ReadMcInt(144);
+            bool ground = Link.ReadMcInt(184) == 1;
+            if (ground)
+            {
+                // On The Forest's ground: the cracks follow the ground's shape in that cell.
+                if (groundKey != Key(x, y, z) || groundMesh == null || groundScale != k)
+                {
+                    if (groundMesh != null) UnityEngine.Object.Destroy(groundMesh);
+                    groundMesh = DigWorld.GroundCellMesh(x, y, z);
+                    groundKey = Key(x, y, z);
+                    groundScale = k;
+                }
+                if (groundMesh != null)
+                {
+                    cube.GetComponent<MeshFilter>().sharedMesh = groundMesh;
+                    cube.transform.position = Vector3.zero;
+                    cube.transform.localScale = Vector3.one;
+                    cube.GetComponent<MeshRenderer>().sharedMaterial = mats[stage];
+                    if (!cube.activeSelf) cube.SetActive(true);
+                    return;
+                }
+            }
+            cube.GetComponent<MeshFilter>().sharedMesh = cubeMesh;
             float e = 0.004f;
             cube.transform.position = new Vector3((x - e) * k, (y - e) * k, -(z + 1 + e) * k);
             cube.transform.localScale = Vector3.one * ((1f + 2f * e) * k);
             cube.GetComponent<MeshRenderer>().sharedMaterial = mats[stage];
             if (!cube.activeSelf) cube.SetActive(true);
+        }
+
+        static Mesh cubeMesh, groundMesh;
+        static long groundKey = long.MinValue;
+        static float groundScale;
+
+        static long Key(int x, int y, int z)
+        {
+            return ((long)(x & 0x1FFFFF) << 42) | ((long)(y & 0x1FFFFF) << 21) | (long)(z & 0x1FFFFF);
         }
 
         static void Build()
@@ -155,6 +186,7 @@ namespace ForestCraft
             mesh.SetUVs(0, uv);
             mesh.SetTriangles(t, 0);
             mesh.RecalculateBounds();
+            cubeMesh = mesh;
             cube.AddComponent<MeshFilter>().sharedMesh = mesh;
             var r = cube.AddComponent<MeshRenderer>();
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;

@@ -6,6 +6,7 @@
 		"BlockCollisionsMixin",
 		"BlockPlaceContextMixin",
 		"ClipContextMixin",
+		"ServerLevelMixin",
 		"ServerPlayerMixin",
 		"VoidChunkMixin"
 	],

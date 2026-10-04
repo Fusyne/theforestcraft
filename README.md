@@ -52,6 +52,18 @@ What `install.bat` does:
 | T, / | chat, command |
 | F5 | third-person view |
 
+## Digging
+
+Hold left click on the ground to dig it out one block at a time, like dirt (stone deeper down,
+which needs a pickaxe). The hole is cut exactly into The Forest's terrain: the ground around it
+keeps The Forest's look, and the sides of the hole are dirt faces cut along the surface. Ground
+fully under the surface next to a hole turns into real Minecraft blocks, so you can keep mining
+down or sideways like in Minecraft.
+
+How the ground around holes is drawn can be changed in
+`The Forest\BepInEx\config\dev.forestcraft.cfg` → `DugGroundLook = Terrain` (The Forest's own
+ground) or `Grass` (Minecraft grass).
+
 ## Building from source (developers)
 
 Requirements: The Forest installed, the [.NET SDK](https://dotnet.microsoft.com/download) (6 or newer).

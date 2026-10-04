@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace ForestCraft
 {
-    [BepInPlugin("dev.forestcraft", "ForestCraft", "0.1.0")]
+    [BepInPlugin("dev.forestcraft", "ForestCraft", "0.2.0")]
     public class Plugin : BaseUnityPlugin
     {
         public static ManualLogSource Log;
@@ -22,6 +22,7 @@ namespace ForestCraft
         BepInEx.Configuration.ConfigEntry<bool> invertY;
         BepInEx.Configuration.ConfigEntry<float> worldScale;
         BepInEx.Configuration.ConfigEntry<float> cursorSpeed;
+        BepInEx.Configuration.ConfigEntry<string> digCap;
         public static float CursorSpeed = 10f;
         float lookYaw, lookPitch;
         int cameraMode;   // 0 first person, 1 behind, 2 in front (F5, like Minecraft)
@@ -35,6 +36,8 @@ namespace ForestCraft
             cursorSpeed = Config.Bind("Controls", "CursorSpeed", 10f, "Speed of the cursor in Minecraft's inventory and chat (pixels per unit of mouse axis at 1080p).");
             CursorSpeed = cursorSpeed.Value;
             worldScale = Config.Bind("World", "Scale", 0f, "Forest units per Minecraft block. 0 = auto (The Forest eye height / Steve's 1.62, kept between 1 and 1.35). Bigger = you are bigger, but above ~1.35 the plane's door gets too tight.");
+            digCap = Config.Bind("World", "DugGroundLook", "Terrain", "How the ground around holes is drawn: Terrain (The Forest's own ground material) or Grass (Minecraft grass).");
+            DigWorld.CapMode = digCap.Value == "Grass" ? "Grass" : "Terrain";
             if (!Link.Create())
             {
                 Log.LogError("ForestCraft: shared link was not created");
@@ -47,6 +50,7 @@ namespace ForestCraft
 
         void LateUpdate()
         {
+            Perf.Frame();
             if (!Link.Create()) return;
             Link.Heartbeat();
             Launcher.Watch();
@@ -109,12 +113,19 @@ namespace ForestCraft
             Link.WriteView(driving ? cameraMode : 0, fw, fh, slot, Drive.ThirdPersonDistance);
             if (inWorld && !scripted)
             {
+                Ground.Update();
                 SampleGrid((float)x, (float)z);
+                double ps = Perf.Now();
                 Solids.Step(x, y, z);
+                Perf.Add("solids", ps);
             }
             Link.WriteSun(SunElevation());
+            double pb = Perf.Now();
             Blocks.Update(Link.View);
-            Dig.Update(Link.View);
+            Perf.Add("blocks", pb);
+            double pd = Perf.Now();
+            DigWorld.Update(Link.View);
+            Perf.Add("dig", pd);
             Trees.Update(input);
             Combat.Update(input);
             // Minecraft holds the player after a respawn until the colliders around it are known.
@@ -127,7 +138,9 @@ namespace ForestCraft
             if (driving) Drive.Apply(yaw, pitch, cameraMode);
             else Drive.Release();
             // After Apply: Steve stands exactly where the camera was just placed from.
+            double pe = Perf.Now();
             Entities.Update(Link.View, cameraMode != 0, Drive.LastFeet);
+            Perf.Add("entities", pe);
         }
 
         static Light sun;
@@ -174,6 +187,7 @@ namespace ForestCraft
         void ReadHotbarAndF5()
         {
             if (Input.GetKeyDown(KeyCode.F5)) cameraMode = (cameraMode + 1) % 3;
+            if (Input.GetKeyDown(KeyCode.F9)) DigWorld.CycleCap();
             for (int i = 0; i < 9; i++)
             {
                 if (Input.GetKeyDown(KeyCode.Alpha1 + i) || Input.GetKeyDown(KeyCode.Keypad1 + i)) slot = i;
@@ -208,7 +222,9 @@ namespace ForestCraft
 
         void OnGUI()
         {
+            double po = Perf.Now();
             Overlay.Draw();
+            Perf.Add("overlay", po);
         }
 
         static int ReadInput()
@@ -229,20 +245,26 @@ namespace ForestCraft
 
         // The island's heightmap, not a ray through the player. RaycastAll was hitting the
         // capsule and every tree, which both punched a hole under the feet and stalled the frame.
+        readonly float[] corners = new float[(Link.Grid + 1) * (Link.Grid + 1)];
+        readonly float[] mins = new float[Link.Grid * Link.Grid];
+        readonly float[] maxs = new float[Link.Grid * Link.Grid];
+        int groundX = int.MinValue, groundZ = int.MinValue, groundTerrains;
+
         void SampleGrid(float mcX, float mcZ)
         {
             int ox = Mathf.FloorToInt(mcX) - Link.Grid / 2;
             int oz = Mathf.FloorToInt(mcZ) - Link.Grid / 2;
+            bool moved = ox != originX || oz != originZ;
             originX = ox;
             originZ = oz;
             bool any = false;
+            // The island as it was before any digging: holes are Minecraft's business (dug cells).
             for (int gz = 0; gz < Link.Grid; gz++)
             {
                 for (int gx = 0; gx < Link.Grid; gx++)
                 {
-                    float ux = (ox + gx + 0.5f) * Link.Scale;
-                    float uz = -(oz + gz + 0.5f) * Link.Scale;
-                    float h = TerrainHeight(ux, uz) / Link.Scale;
+                    float h = Ground.Ready ? Ground.HeightMc(ox + gx + 0.5f, oz + gz + 0.5f)
+                        : TerrainHeight((ox + gx + 0.5f) * Link.Scale, -(oz + gz + 0.5f) * Link.Scale) / Link.Scale;
                     heights[gz * Link.Grid + gx] = h;
                     if (!float.IsNaN(h)) any = true;
                 }
@@ -253,6 +275,26 @@ namespace ForestCraft
                 Log.LogWarning("ForestCraft: no ground under the player; Minecraft will not take the body");
             }
             Link.PublishGrid(originX, originZ, heights);
+            // Corners and per-column extremes: only when the window moves (the original surface never changes).
+            if (Ground.Ready && (moved || ox != groundX || oz != groundZ || groundTerrains != Ground.Terrains.Count))
+            {
+                groundX = ox; groundZ = oz; groundTerrains = Ground.Terrains.Count;
+                int n = Link.Grid + 1;
+                for (int gz = 0; gz < n; gz++)
+                    for (int gx = 0; gx < n; gx++)
+                        corners[gz * n + gx] = Ground.HeightMc(ox + gx, oz + gz);
+                for (int gz = 0; gz < Link.Grid; gz++)
+                {
+                    for (int gx = 0; gx < Link.Grid; gx++)
+                    {
+                        float lo, hi;
+                        Ground.MinMaxMc(ox + gx, oz + gz, out lo, out hi);
+                        mins[gz * Link.Grid + gx] = lo;
+                        maxs[gz * Link.Grid + gx] = hi;
+                    }
+                }
+                Link.PublishGround(ox, oz, corners, mins, maxs);
+            }
         }
 
         static float TerrainHeight(float x, float z)

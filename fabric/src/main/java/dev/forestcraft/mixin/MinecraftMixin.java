@@ -64,6 +64,7 @@ public abstract class MinecraftMixin {
 		}
 		forestcraft$view(minecraft);
 		dev.forestcraft.BlockExport.tick(minecraft);
+		dev.forestcraft.TerrainDig.pump();
 		if (!forestcraft$hidden) {
 			GLFW.glfwHideWindow(minecraft.getWindow().handle());
 			forestcraft$hidden = true;
@@ -139,7 +140,7 @@ public abstract class MinecraftMixin {
 			}
 		}
 		if (ForestLink.buffer() != null) ForestLink.buffer().putInt(Proto.OFF_MC + 128, aim);
-		if (!attack || aim != 2) dev.forestcraft.TerrainDig.stop();
+		if (!attack || aim != 2) dev.forestcraft.TerrainDig.stop(minecraft);
 		if (!attack || aim == 0 || minecraft.player == null) { forestcraft$swing = 0; return; }
 		if (forestcraft$swing++ % 5 == 0) minecraft.player.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
 		if (aim == 2) dev.forestcraft.TerrainDig.request(minecraft, pos);

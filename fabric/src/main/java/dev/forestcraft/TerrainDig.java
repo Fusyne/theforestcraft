@@ -10,20 +10,36 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Digging the island one block at a time, like dirt. Unity 5 terrain has no holes: The Forest
- * lowers its heightmap under the dug cell, then the columns around whose ground actually sank
- * get just enough blocks (grass on top, dirt under) to rebuild the surface they had, so the
- * result is a one-block hole with Minecraft walls, not a patch of converted ground.
+ * Digging into the island, the SkyCraft way. The Forest's ground is a heightmap, not blocks;
+ * cells (blocks) of it are taken out one at a time:
+ * <ul>
+ * <li><b>dug</b>: mining the ground takes out the cell the crosshair is on. Nothing of The
+ * Forest's ground is left in it (no collision here, The Forest pushes its terrain under it and
+ * draws the surface around cut exactly along the cell).</li>
+ * <li><b>revealed</b>: the cells next to a dug one that are wholly under the surface become real
+ * blocks (dirt, stone deeper), so digging on goes on as ordinary Minecraft mining. Cells only
+ * partly under the surface stay The Forest's; it draws their part under the surface as dirt
+ * faces cut along the surface ("half blocks"), so a hole is always closed.</li>
+ * </ul>
+ * A revealed block that is broken (by anything) becomes a dug cell too. Every converted cell is
+ * kept with the world (forestcraft_ground.txt) and the dug ones are sent to The Forest again on
+ * every link.
  */
 public final class TerrainDig {
 	public static final int OFF_DIG = 0xA20000;
 	public static final int RING = 1024;
 	public static final int ENTRY = 16;
-	private static final int R = 3;
-	private static final int SIDE = R * 2 + 1;
 
-	private record Pending(BlockPos cell, double[] before, int[] delay) {}
-	private static final java.util.List<Pending> pending = new java.util.ArrayList<>();
+	/** Cells no longer The Forest's ground (dug or revealed). Read by collisions on both threads. */
+	private static final java.util.Set<Long> converted = java.util.concurrent.ConcurrentHashMap.newKeySet();
+	/** Cells emptied of The Forest's ground: sent to The Forest. */
+	private static final java.util.Set<Long> dug = java.util.concurrent.ConcurrentHashMap.newKeySet();
+	private static final java.util.concurrent.ConcurrentLinkedQueue<Long> toForest = new java.util.concurrent.ConcurrentLinkedQueue<>();
+	private static final java.util.concurrent.ConcurrentLinkedQueue<Long> emptied = new java.util.concurrent.ConcurrentLinkedQueue<>();
+	private static final StringBuilder unsaved = new StringBuilder();
+	private static Object loadedFor;
+	private static java.nio.file.Path saveFile;
+	private static int written = Integer.MIN_VALUE;
 
 	private static long digKey = Long.MIN_VALUE;
 	private static int digTicks;
@@ -31,7 +47,26 @@ public final class TerrainDig {
 
 	private TerrainDig() {}
 
-	public static void stop() {
+	public static boolean isConverted(int x, int y, int z) {
+		return !converted.isEmpty() && converted.contains(BlockPos.asLong(x, y, z));
+	}
+
+	/** Wholly under the original surface (same rule and numbers as DigWorld.Revealed in The Forest). */
+	public static boolean whollyInside(int x, int y, int z) {
+		double min = ForestLink.minHeight(x, z);
+		return !Double.isNaN(min) && y + 1 <= min - 0.02;
+	}
+
+	/** Deep enough for stone (same rule as DigWorld.MaterialOf in The Forest). */
+	private static boolean deep(int x, int y, int z) {
+		double hc = ForestLink.heightAt(x, z);
+		return !Double.isNaN(hc) && y + 1 <= hc - 3.0;
+	}
+
+	/** Attack released or aimed elsewhere: the cracks go too. */
+	public static void stop(Minecraft minecraft) {
+		if (digKey != Long.MIN_VALUE && minecraft.level != null && minecraft.player != null)
+			minecraft.level.destroyBlockProgress(minecraft.player.getId(), BlockPos.of(digKey), -1);
 		digKey = Long.MIN_VALUE;
 		digTicks = 0;
 	}
@@ -39,103 +74,194 @@ public final class TerrainDig {
 	/** Client tick while attack is held on the island's ground at pos: mine it like dirt. */
 	public static void request(Minecraft minecraft, BlockPos pos) {
 		long key = pos.asLong();
-		if (key != digKey) { digKey = key; digTicks = 0; }
+		if (key != digKey) { stop(minecraft); digKey = key; digTicks = 0; }
 		if (digTicks < 0) return;
 		digTicks++;
-		boolean shovel = minecraft.player != null && minecraft.player.getMainHandItem().getItem() instanceof net.minecraft.world.item.ShovelItem;
-		int needed = shovel ? 4 : 15; // dirt: 0.75 s by hand, ~0.2 s with an iron shovel
+		if (minecraft.player == null || minecraft.level == null) return;
+		// Mined like the block it is (dirt, stone deeper): vanilla's speed rules, tool and all.
+		BlockState state = deep(pos.getX(), pos.getY(), pos.getZ()) ? Blocks.STONE.defaultBlockState() : Blocks.DIRT.defaultBlockState();
+		ItemStack tool = minecraft.player.getMainHandItem();
+		boolean correct = !state.requiresCorrectToolForDrops() || tool.isCorrectToolForDrops(state);
+		float speed = Math.max(0.1f, tool.getDestroySpeed(state));
+		float hardness = state.getDestroySpeed(minecraft.level, pos);
+		int needed = Math.max(1, (int) Math.ceil(hardness * (correct ? 30f : 100f) / speed));
 		if (minecraft.level != null) minecraft.level.destroyBlockProgress(minecraft.player.getId(), pos, Math.min(9, digTicks * 10 / needed));
 		if (digTicks < needed) return;
 		digTicks = -1; // done with this cell until the aim moves
 		if (minecraft.level != null) minecraft.level.destroyBlockProgress(minecraft.player.getId(), pos, -1);
 		var server = minecraft.getSingleplayerServer();
 		if (server == null || minecraft.player == null) return;
-		// The ground block is the one whose top is the rounded surface (same rule as placing):
-		// digging it takes the ground down a whole block, never just a sliver.
-		// The aimed block is the dug block (aimShape uses the same rounded grid).
 		BlockPos cell = pos.immutable();
 		java.util.UUID id = minecraft.player.getUUID();
-		server.execute(() -> dig(server, cell, id));
+		server.execute(() -> dig(server, cell, id, correct));
 	}
 
-	/** Server thread: ask The Forest to lower the ground under the cell, remember the surface around it. */
-	private static void dig(net.minecraft.server.MinecraftServer server, BlockPos cell, java.util.UUID player) {
-		ForestLink.refreshGrid();
-		double[] before = new double[SIDE * SIDE];
-		for (int dz = -R; dz <= R; dz++)
-			for (int dx = -R; dx <= R; dx++)
-				before[(dz + R) * SIDE + dx + R] = ForestLink.heightAt(cell.getX() + dx, cell.getZ() + dz);
-		publish(cell);
-		synchronized (pending) { pending.add(new Pending(cell, before, new int[] {6})); }
-		var p = server.getPlayerList().getPlayer(player);
-		if (p != null) {
-			ItemStack dirt = new ItemStack(Items.DIRT, 1);
-			if (!p.getInventory().add(dirt)) p.drop(dirt, false);
+	/** Server thread: the cell's ground is gone; its neighbours wholly under the surface become blocks. */
+	private static void dig(net.minecraft.server.MinecraftServer server, BlockPos cell, java.util.UUID id, boolean harvest) {
+		ensureLoaded(server);
+		var player = server.getPlayerList().getPlayer(id);
+		if (player == null) return;
+		ServerLevel level = player.level();
+		if (!level.getBlockState(cell).isAir()) return;
+		long key = cell.asLong();
+		if (!converted.add(key)) return;
+		boolean stone = deep(cell.getX(), cell.getY(), cell.getZ());
+		markDug(key, cell);
+		BlockState was = stone ? Blocks.STONE.defaultBlockState() : Blocks.DIRT.defaultBlockState();
+		level.levelEvent(2001, cell, net.minecraft.world.level.block.Block.getId(was)); // break particles + sound
+		if (harvest) {
+			ItemStack drop = new ItemStack(stone ? Items.COBBLESTONE : Items.DIRT, 1);
+			if (!player.getInventory().add(drop)) player.drop(drop, false);
+		}
+		reveal(level, cell);
+		// The ground's surface may just enter the cell above: a thin sliver left floating over
+		// the hole. Half a block of ground or less there goes with the cell under it.
+		BlockPos above = cell.above();
+		double top = ForestLink.maxHeight(above.getX(), above.getZ());
+		long up = above.asLong();
+		if (!Double.isNaN(top) && top > above.getY() && top < above.getY() + 0.5 && !converted.contains(up) && level.getBlockState(above).isAir()) {
+			converted.add(up);
+			markDug(up, above);
+			reveal(level, above);
 		}
 	}
 
-	/**
-	 * Server tick, a few ticks after the dig (The Forest has lowered its terrain by then).
-	 * The ground that was there before and is now exposed becomes blocks, so the hole is a cube:
-	 *  - the dug column gets a block floor right under the dug cell;
-	 *  - every column whose ground sank gets blocks back up to the surface it had (grass on top),
-	 *    which are the hole's walls. Only cells that were under the ground before are filled, so a
-	 *    block the player already mined out is never put back.
-	 */
+	private static void markDug(long key, BlockPos cell) {
+		if (!dug.add(key)) return;
+		toForest.add(key);
+		save("d", cell);
+	}
+
+	private static void reveal(ServerLevel level, BlockPos cell) {
+		int revealed = 0;
+		for (net.minecraft.core.Direction d : net.minecraft.core.Direction.values()) {
+			BlockPos n = cell.relative(d);
+			long key = n.asLong();
+			if (converted.contains(key) || !whollyInside(n.getX(), n.getY(), n.getZ())) continue;
+			converted.add(key);
+			save("r", n);
+			if (!level.getBlockState(n).isAir()) continue; // something is already there
+			BlockState state = deep(n.getX(), n.getY(), n.getZ()) ? Blocks.STONE.defaultBlockState() : Blocks.DIRT.defaultBlockState();
+			level.setBlock(n, state, 2 | 16);
+			revealed++;
+		}
+		ForestLink.LOG.info("dug {} {} {}: {} blocks revealed", cell.getX(), cell.getY(), cell.getZ(), revealed);
+	}
+
+	/** Server: a block changed (ServerLevel mixin). A revealed block gone means its cell is open now. */
+	public static void blockChanged(BlockPos pos, BlockState old, BlockState now) {
+		if (old.isAir() || !now.isAir() || converted.isEmpty()) return;
+		long key = pos.asLong();
+		if (converted.contains(key) && !dug.contains(key)) emptied.add(key);
+	}
+
+	/** Server tick: open what was emptied, save what changed. */
 	public static void serverTick(ServerLevel level) {
-		Pending[] work;
-		synchronized (pending) {
-			if (pending.isEmpty()) return;
-			work = pending.toArray(new Pending[0]);
+		ensureLoaded(level.getServer());
+		Long key;
+		while ((key = emptied.poll()) != null) {
+			BlockPos pos = BlockPos.of(key);
+			if (dug.contains(key) || !level.getBlockState(pos).isAir()) continue;
+			markDug(key, pos);
+			reveal(level, pos);
 		}
-		for (Pending job : work) {
-			if (--job.delay()[0] > 0) continue;
-			synchronized (pending) { pending.remove(job); }
-			long started = System.nanoTime();
-			ForestLink.refreshGrid();
-			BlockPos cell = job.cell();
-			BlockPos.MutableBlockPos p = new BlockPos.MutableBlockPos();
-			int filled = 0;
-			// Only what can be seen: the hole's floor, its four-plus-four walls (the ring next to the
-			// hole, from the dug level up to their surface), and one surface block on the next ring
-			// where the ground visibly sank. Placed without neighbour updates (flags 2|16): before,
-			// whole columns 7 wide were refilled with full updates and the game hitched.
-			for (int dz = -2; dz <= 2; dz++) {
-				for (int dx = -2; dx <= 2; dx++) {
-					int x = cell.getX() + dx, z = cell.getZ() + dz;
-					double was = job.before()[(dz + R) * SIDE + dx + R];
-					double now = ForestLink.heightAt(x, z);
-					if (Double.isNaN(was) || Double.isNaN(now)) continue;
-					int ring = Math.max(Math.abs(dx), Math.abs(dz));
-					int surface = (int) Math.round(was) - 1;
-					int from, to;
-					if (ring == 0) { from = cell.getY() - 1; to = cell.getY() - 1; }           // floor
-					else if (ring == 1) { if (now > was - 0.02) continue; from = Math.max((int) Math.floor(now), cell.getY() - 1); to = surface; } // walls
-					else { if (now > was - 0.25) continue; from = surface; to = surface; }    // lip
-					for (int y = from; y <= to; y++) {
-						p.set(x, y, z);
-						if (!level.getBlockState(p).isAir()) continue;
-						boolean top = y == surface && ring > 0 && level.getBlockState(p.above()).isAir();
-						BlockState state = top ? Blocks.GRASS_BLOCK.defaultBlockState()
-							: y < surface - 2 ? Blocks.STONE.defaultBlockState() : Blocks.DIRT.defaultBlockState();
-						level.setBlock(p, state, 2 | 16);
-						filled++;
+		flush();
+	}
+
+	// ---- with the world ------------------------------------------------------------------------
+
+	private static synchronized void ensureLoaded(net.minecraft.server.MinecraftServer server) {
+		if (server == null || loadedFor == server) return;
+		loadedFor = server;
+		converted.clear();
+		dug.clear();
+		synchronized (unsaved) { unsaved.setLength(0); }
+		saveFile = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("forestcraft_ground.txt");
+		int count = 0;
+		try {
+			if (java.nio.file.Files.isRegularFile(saveFile)) {
+				for (String line : java.nio.file.Files.readAllLines(saveFile)) count += parse(line, false);
+			} else {
+				// Holes dug before this version were kept by The Forest (dig.txt): bring them over.
+				java.nio.file.Path old = Proto.linkFile().resolveSibling("dig.txt");
+				if (java.nio.file.Files.isRegularFile(old)) {
+					for (String line : java.nio.file.Files.readAllLines(old)) {
+						String[] p = line.trim().split(" ");
+						if (p.length == 5 && p[0].equals("c")) count += parse("d " + p[1] + " " + p[2] + " " + p[3], true);
 					}
+					ForestLink.LOG.info("{} dug cells imported from dig.txt", count);
 				}
 			}
-			ForestLink.LOG.info("dug {} {} {}: {} blocks of ground around, {} ms", cell.getX(), cell.getY(), cell.getZ(), filled, (System.nanoTime() - started) / 1000000);
+		} catch (Exception e) {
+			ForestLink.LOG.warn("dug ground not loaded: {}", e.toString());
+		}
+		toForest.clear();
+		toForest.addAll(dug);
+		ForestLink.LOG.info("dug ground: {} cells converted, {} dug", converted.size(), dug.size());
+	}
+
+	private static int parse(String line, boolean save) {
+		String[] p = line.trim().split(" ");
+		if (p.length != 4) return 0;
+		try {
+			BlockPos pos = new BlockPos(Integer.parseInt(p[1]), Integer.parseInt(p[2]), Integer.parseInt(p[3]));
+			converted.add(pos.asLong());
+			if (p[0].equals("d")) dug.add(pos.asLong());
+			if (save) save(p[0], pos);
+			return 1;
+		} catch (NumberFormatException e) {
+			return 0;
 		}
 	}
 
-	private static synchronized void publish(BlockPos cell) {
+	private static void save(String kind, BlockPos pos) {
+		synchronized (unsaved) {
+			unsaved.append(kind).append(' ').append(pos.getX()).append(' ').append(pos.getY()).append(' ').append(pos.getZ()).append('\n');
+		}
+	}
+
+	private static void flush() {
+		String text;
+		synchronized (unsaved) {
+			if (unsaved.length() == 0 || saveFile == null) return;
+			text = unsaved.toString();
+			unsaved.setLength(0);
+		}
+		try {
+			java.nio.file.Files.writeString(saveFile, text, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+		} catch (Exception e) {
+			ForestLink.LOG.warn("dug ground not saved: {}", e.toString());
+		}
+	}
+
+	// ---- to The Forest -------------------------------------------------------------------------
+
+	/**
+	 * Client tick: dug cells go to The Forest through a ring (OFF_DIG = cells written, +4 = cells
+	 * The Forest applied). The Forest zeroes both when it (re)creates the link: everything is sent
+	 * again then, and on Minecraft's first tick too.
+	 */
+	public static void pump() {
 		MappedByteBuffer map = ForestLink.buffer();
 		if (map == null) return;
-		int written = map.getInt(OFF_DIG);
-		int at = OFF_DIG + 64 + Math.floorMod(written, RING) * ENTRY;
-		map.putInt(at, cell.getX());
-		map.putInt(at + 4, cell.getY());
-		map.putInt(at + 8, cell.getZ());
-		map.putInt(OFF_DIG, written + 1);
+		int cur = map.getInt(OFF_DIG);
+		if (cur != written) {
+			written = cur;
+			toForest.clear();
+			toForest.addAll(dug);
+		}
+		int applied = map.getInt(OFF_DIG + 4);
+		if (applied > written) applied = written;
+		Long key;
+		while (written - applied < RING - 8 && (key = toForest.poll()) != null) {
+			BlockPos cell = BlockPos.of(key);
+			int at = OFF_DIG + 64 + Math.floorMod(written, RING) * ENTRY;
+			map.putInt(at, cell.getX());
+			map.putInt(at + 4, cell.getY());
+			map.putInt(at + 8, cell.getZ());
+			written++;
+			map.putInt(OFF_DIG, written);
+		}
 	}
 
 	private static int givesRead = Integer.MIN_VALUE;

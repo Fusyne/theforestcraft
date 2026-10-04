@@ -12,8 +12,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /**
  * A block changed: its section (and neighbours, for face culling) is re-sent to The Forest.
  * In 26.2 a placed or broken block goes through sendBlockUpdated -> LevelExtractor.blockChanged;
- * setSectionDirtyWithNeighbors is only for whole chunk loads, so hooking it alone meant a
- * section was sent once and never updated (second block invisible, mined block still there).
+ * setSectionDirtyWithNeighbors only comes with light updates (Minecraft's light is not used by
+ * The Forest's meshes): hooking it re-sent 27 sections per light change, the lag when digging.
  */
 @Mixin(ClientLevel.class)
 public abstract class ClientLevelMixin {
@@ -25,11 +25,6 @@ public abstract class ClientLevelMixin {
 	@Inject(method = "setBlocksDirty", at = @At("HEAD"))
 	private void forestcraft$blocksDirty(BlockPos pos, BlockState oldState, BlockState newState, CallbackInfo ci) {
 		BlockExport.markBlock(pos.getX(), pos.getY(), pos.getZ());
-	}
-
-	@Inject(method = "setSectionDirtyWithNeighbors", at = @At("HEAD"))
-	private void forestcraft$sectionDirty(int x, int y, int z, CallbackInfo ci) {
-		BlockExport.markDirty(x, y, z);
 	}
 
 	@Inject(method = "destroyBlockProgress", at = @At("HEAD"))

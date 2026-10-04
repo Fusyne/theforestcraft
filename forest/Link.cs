@@ -70,7 +70,7 @@ namespace ForestCraft
                 WriteInt(OffHeader + 32, 0);
                 WriteInt(OffHeader + 12, 0); // Minecraft writes its pid when it links
                 Blocks.Reset(view);
-                Dig.Reset(view);
+                DigWorld.Reset(view);
                 McScreen.Reset(view);
                 Loot.Reset(view);
                 WriteInt(OffForest + 84, 0);
@@ -293,6 +293,26 @@ namespace ForestCraft
                 at += 4;
             }
             WriteInt(OffGrid, seq + 1);
+        }
+
+        const int OffGround = 0xA30000;
+
+        // The original surface in detail around the player: heights at block corners
+        // ((Grid+1)^2) and each column's lowest and highest point (Grid^2 each), Minecraft units.
+        public static void PublishGround(int originX, int originZ, float[] corners, float[] mins, float[] maxs)
+        {
+            if (view == IntPtr.Zero) return;
+            int seq = ReadInt(OffGround) + 1;
+            if ((seq & 1) == 0) seq++;
+            WriteInt(OffGround, seq);
+            WriteInt(OffGround + 4, originX);
+            WriteInt(OffGround + 8, originZ);
+            WriteInt(OffGround + 12, Grid);
+            int at = OffGround + 16;
+            for (int i = 0; i < corners.Length; i++) { WriteFloat(at, corners[i]); at += 4; }
+            for (int i = 0; i < mins.Length; i++) { WriteFloat(at, mins[i]); at += 4; }
+            for (int i = 0; i < maxs.Length; i++) { WriteFloat(at, maxs[i]); at += 4; }
+            WriteInt(OffGround, seq + 1);
         }
 
         static byte[] solidBytes;

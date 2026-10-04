@@ -98,14 +98,16 @@ public final class BlockExport {
 		ClientLevel level = minecraft.level;
 		if (map == null || level == null || minecraft.player == null) return;
 		exportAtlas(minecraft, map);
+		publishSprites(minecraft, level, map);
 		int msg = map.getInt(OFF_MESH);
 		int ack = map.getInt(OFF_MESH + 4);
-		if (msg != lastMsg && lastMsg != Integer.MIN_VALUE && msg == 0) { sent.clear(); ItemExport.resend(); } // The Forest restarted
+		if (msg != lastMsg && lastMsg != Integer.MIN_VALUE && msg == 0) { sent.clear(); sentHash.clear(); ItemExport.resend(); } // The Forest restarted
 		if (lastMsg == Integer.MIN_VALUE) {
 			// (Re)linked: everything gets sent again, mailbox starts free.
 			map.putInt(OFF_MESH, ack);
 			msg = ack;
 			sent.clear();
+			sentHash.clear();
 			ItemExport.resend();
 		}
 		lastMsg = msg;
@@ -139,9 +141,74 @@ public final class BlockExport {
 		dirty.remove(pick);
 		if (pick == urgent) urgent = Long.MIN_VALUE;
 		int quads = writeSection(minecraft, level, map, bx, by, bz);
+		// Same meshes as last time (a neighbour's change that didn't touch this one): not re-sent.
+		int hash = contentHash(map);
+		Integer before = sentHash.get(pick);
+		if (before != null && before == hash) return;
+		sentHash.put(pick, hash);
 		if (quads > 0) sent.add(pick); else sent.remove(pick);
 		map.putInt(OFF_MESH, msg + 1);
 		lastMsg = msg + 1;
+	}
+
+	private static final java.util.HashMap<Long, Integer> sentHash = new java.util.HashMap<>();
+
+	private static int contentHash(MappedByteBuffer map) {
+		int count = Math.max(0, Math.min(MAX_QUADS, map.getInt(OFF_MESH + 20)));
+		int lights = Math.max(0, Math.min(MAX_LIGHTS, map.getInt(OFF_MESH + 28)));
+		int end = OFF_MESH + HEAD + count * QUAD + 4 + lights * 16;
+		int h = 1;
+		for (int at = OFF_MESH + 8; at + 4 <= end; at += 4) h = 31 * h + map.getInt(at);
+		return h;
+	}
+
+	// ---- textures of the dug ground (The Forest draws its walls with them): OFF_SPRITES ----
+	private static final int OFF_SPRITES = 0xA34000;
+	private static int spriteTicks;
+
+	private static void publishSprites(Minecraft minecraft, ClientLevel level, MappedByteBuffer map) {
+		if (exportIndex == 0 || spriteTicks++ % 100 != 0) return; // block atlas not exported yet
+		BlockStateModelSet models = minecraft.getModelManager().getBlockStateModelSet();
+		BlockState grass = net.minecraft.world.level.block.Blocks.GRASS_BLOCK.defaultBlockState();
+		float[] dirt = topRect(models, net.minecraft.world.level.block.Blocks.DIRT.defaultBlockState());
+		float[] stone = topRect(models, net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+		float[] top = topRect(models, grass);
+		if (dirt == null || stone == null || top == null) return;
+		for (int i = 0; i < 4; i++) {
+			map.putFloat(OFF_SPRITES + 4 + i * 4, dirt[i]);
+			map.putFloat(OFF_SPRITES + 20 + i * 4, stone[i]);
+			map.putFloat(OFF_SPRITES + 36 + i * 4, top[i]);
+		}
+		int color = 0xFF7CBD6B;
+		try {
+			BlockTintSource tint = minecraft.getBlockColors().getTintSource(grass, 0);
+			if (tint != null && minecraft.player != null) color = tint.colorInWorld(grass, level, minecraft.player.blockPosition()) | 0xFF000000;
+		} catch (RuntimeException e) {
+			// keep the plains colour
+		}
+		map.putInt(OFF_SPRITES + 52, color);
+		map.putInt(OFF_SPRITES, 1);
+	}
+
+	/** Atlas rect (u0, v0, u1, v1) of a block's top face. */
+	private static float[] topRect(BlockStateModelSet models, BlockState state) {
+		BlockStateModel model = models.get(state);
+		if (model == null) return null;
+		parts.clear();
+		model.collectParts(RandomSource.create(0L), parts);
+		float u0 = Float.MAX_VALUE, v0 = Float.MAX_VALUE, u1 = -Float.MAX_VALUE, v1 = -Float.MAX_VALUE;
+		for (BlockStateModelPart part : parts) {
+			for (BakedQuad quad : part.getQuads(Direction.UP)) {
+				for (int i = 0; i < 4; i++) {
+					long uv = quad.packedUV(i);
+					float u = UVPair.unpackU(uv), v = UVPair.unpackV(uv);
+					u0 = Math.min(u0, u); u1 = Math.max(u1, u);
+					v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+				}
+			}
+		}
+		parts.clear();
+		return u0 == Float.MAX_VALUE ? null : new float[] {u0, v0, u1, v1};
 	}
 
 	private static boolean sectionEmpty(ClientLevel level, int sx, int sy, int sz) {
@@ -423,5 +490,10 @@ public final class BlockExport {
 		map.putInt(Proto.OFF_MC + 140, crack.getY());
 		map.putInt(Proto.OFF_MC + 144, crack.getZ());
 		map.putInt(Proto.OFF_MC + 132, crackStage);
+		// The crack is on The Forest's ground (not a block): The Forest cracks the ground's own shape.
+		boolean ground = minecraft.level != null && minecraft.level.getBlockState(crack).isAir()
+			&& ForestLink.solidShape(crack.getX(), crack.getY(), crack.getZ()) == null
+			&& ForestLink.aimShape(crack.getX(), crack.getY(), crack.getZ()) != null;
+		map.putInt(Proto.OFF_MC + 184, ground ? 1 : 0);
 	}
 }

@@ -354,6 +354,7 @@ public final class ForestLink {
 	public static void refreshGrid() {
 		if (map == null) return;
 		refreshSolids();
+		refreshGround();
 		int seq = map.getInt(Proto.OFF_GRID);
 		if ((seq & 1) != 0 || seq == 0 || seq == gridSeq) return;
 		int ox = map.getInt(Proto.OFF_GRID + 4);
@@ -441,17 +442,52 @@ public final class ForestLink {
 	}
 
 	/**
-	 * What the crosshair hits of The Forest in this block: trees/rocks/plane at 1/8, and the island
-	 * as whole blocks up to its rounded surface (the block whose top is round(h)). That is exactly
-	 * the block a dig removes, so aim, outline, cracks and the dug block are one and the same cube.
-	 * Collision keeps the smooth surface; only aiming uses the block grid.
+	 * What the crosshair hits of The Forest in this block: trees/rocks/plane at 1/8, and the
+	 * island's ground as it really is in that block (4x4 columns, 1/8 high), so the cell outlined
+	 * and dug is the one the surface is in where you look. Dug or revealed cells are not ground.
 	 */
 	public static net.minecraft.world.phys.shapes.VoxelShape aimShape(int x, int y, int z) {
 		net.minecraft.world.phys.shapes.VoxelShape shape = solidShape(x, y, z);
-		int top = groundTop(x, z);
-		if (top != Integer.MIN_VALUE && y <= top && y >= top - 8)
-			shape = shape == null ? net.minecraft.world.phys.shapes.Shapes.block() : net.minecraft.world.phys.shapes.Shapes.or(shape, net.minecraft.world.phys.shapes.Shapes.block());
-		return shape;
+		net.minecraft.world.phys.shapes.VoxelShape ground = groundShape(x, y, z);
+		if (ground == null) return shape;
+		return shape == null ? ground : net.minecraft.world.phys.shapes.Shapes.or(shape, ground);
+	}
+
+	private static final java.util.concurrent.ConcurrentHashMap<Long, net.minecraft.world.phys.shapes.VoxelShape> GROUND_SHAPES = new java.util.concurrent.ConcurrentHashMap<>();
+
+	private static net.minecraft.world.phys.shapes.VoxelShape groundShape(int x, int y, int z) {
+		if (TerrainDig.isConverted(x, y, z)) return null;
+		double hc = heightAt(x, z);
+		if (Double.isNaN(hc)) return null;
+		double min = minHeight(x, z), max = maxHeight(x, z);
+		if (Double.isNaN(min) || Double.isNaN(max)) { min = hc; max = hc; }
+		if (y >= max - 1.0e-3 || y < Math.floor(hc) - 8) return null;
+		if (y + 1 <= min + 1.0e-3) return net.minecraft.world.phys.shapes.Shapes.block();
+		long key = 0L;
+		boolean any = false, full = true;
+		for (int sz = 0; sz < 4; sz++) {
+			for (int sx = 0; sx < 4; sx++) {
+				double h = surfaceAt(x + (sx + 0.5) / 4.0, z + (sz + 0.5) / 4.0);
+				if (Double.isNaN(h)) h = hc;
+				int q = (int) Math.ceil((h - y) * 8.0 - 0.05);
+				q = Math.max(0, Math.min(8, q));
+				if (q > 0) any = true;
+				if (q < 8) full = false;
+				key |= (long) q << ((sz * 4 + sx) * 4);
+			}
+		}
+		// A sliver of ground in this cell (the surface only just enters it): still aimable.
+		if (!any) return max > y + 0.01 ? net.minecraft.world.phys.shapes.Shapes.box(0, 0, 0, 1, 0.125, 1) : null;
+		if (full) return net.minecraft.world.phys.shapes.Shapes.block();
+		final long mask = key;
+		return GROUND_SHAPES.computeIfAbsent(mask, k -> {
+			var bits = new net.minecraft.world.phys.shapes.BitSetDiscreteVoxelShape(4, 8, 4);
+			for (int i = 0; i < 16; i++) {
+				int q = (int) ((k >>> (i * 4)) & 15L);
+				for (int yy = 0; yy < q; yy++) bits.fill(i & 3, yy, i >> 2);
+			}
+			return new net.minecraft.world.phys.shapes.CubeVoxelShape(bits).optimize();
+		});
 	}
 
 	/** Y of the island's top block in this column (its top face is the rounded surface), or MIN_VALUE. */
@@ -460,7 +496,7 @@ public final class ForestLink {
 		return Double.isNaN(h) ? Integer.MIN_VALUE : (int) Math.round(h) - 1;
 	}
 
-	/** The island's surface height (MC units) at the centre of this column, or NaN outside the grid. */
+	/** The island's original surface (MC units) at the centre of this column, or NaN outside the grid. */
 	public static double heightAt(int x, int z) {
 		int lx = x - originX;
 		int lz = z - originZ;
@@ -469,18 +505,72 @@ public final class ForestLink {
 		return Float.isNaN(h) ? Double.NaN : h;
 	}
 
-	/** Top of the Forest surface inside this block, or NaN. */
+	/** Top of the Forest surface inside this block, or NaN (none, or the cell was dug/revealed). */
 	public static double surfaceIn(int x, int y, int z) {
 		int lx = x - originX;
 		int lz = z - originZ;
 		if (lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID || gridSeq == 0) return Double.NaN;
 		float h = heights[lz * Proto.GRID + lx];
 		if (Float.isNaN(h)) return Double.NaN;
-		int block = (int) Math.floor(h - 1.0e-4);
+		int block = (int) Math.floor(h - 1e-4);
 		if (y > block || y < block - 8) return Double.NaN;
+		if (TerrainDig.isConverted(x, y, z)) return Double.NaN;
 		if (y < block) return 1.0;
 		double top = h - block;
 		if (top < 1.0e-3) return 1.0;
 		return Math.min(1.0, top);
+	}
+
+	// ---- the original surface in detail (The Forest, OFF_GROUND) --------------------------------
+
+	private static final int OFF_GROUND = 0xA30000;
+	private static float[] corners = new float[(Proto.GRID + 1) * (Proto.GRID + 1)];
+	private static float[] mins = new float[Proto.GRID * Proto.GRID];
+	private static float[] maxs = new float[Proto.GRID * Proto.GRID];
+	private static int groundX, groundZ, groundSeq;
+
+	private static void refreshGround() {
+		int seq = map.getInt(OFF_GROUND);
+		if ((seq & 1) != 0 || seq == 0 || seq == groundSeq) return;
+		int ox = map.getInt(OFF_GROUND + 4), oz = map.getInt(OFF_GROUND + 8);
+		if (map.getInt(OFF_GROUND + 12) != Proto.GRID) return;
+		int n = Proto.GRID + 1;
+		float[] c = new float[n * n], lo = new float[Proto.GRID * Proto.GRID], hi = new float[Proto.GRID * Proto.GRID];
+		int at = OFF_GROUND + 16;
+		for (int i = 0; i < c.length; i++) { c[i] = map.getFloat(at); at += 4; }
+		for (int i = 0; i < lo.length; i++) { lo[i] = map.getFloat(at); at += 4; }
+		for (int i = 0; i < hi.length; i++) { hi[i] = map.getFloat(at); at += 4; }
+		if (map.getInt(OFF_GROUND) != seq) return;
+		corners = c; mins = lo; maxs = hi;
+		groundX = ox; groundZ = oz;
+		groundSeq = seq;
+	}
+
+	/** Lowest point of the original surface over this column, or NaN. */
+	public static double minHeight(int x, int z) {
+		int lx = x - groundX, lz = z - groundZ;
+		if (groundSeq == 0 || lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID) return Double.NaN;
+		float v = mins[lz * Proto.GRID + lx];
+		return Float.isNaN(v) ? Double.NaN : v;
+	}
+
+	/** Highest point of the original surface over this column, or NaN. */
+	public static double maxHeight(int x, int z) {
+		int lx = x - groundX, lz = z - groundZ;
+		if (groundSeq == 0 || lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID) return Double.NaN;
+		float v = maxs[lz * Proto.GRID + lx];
+		return Float.isNaN(v) ? Double.NaN : v;
+	}
+
+	/** The original surface at any point (bilinear between block corners), or NaN. */
+	public static double surfaceAt(double x, double z) {
+		int bx = (int) Math.floor(x), bz = (int) Math.floor(z);
+		int lx = bx - groundX, lz = bz - groundZ;
+		if (groundSeq == 0 || lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID) return Double.NaN;
+		int n = Proto.GRID + 1;
+		float[] c = corners;
+		double h00 = c[lz * n + lx], h10 = c[lz * n + lx + 1], h01 = c[(lz + 1) * n + lx], h11 = c[(lz + 1) * n + lx + 1];
+		double fx = x - bx, fz = z - bz;
+		return (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
 	}
 }
