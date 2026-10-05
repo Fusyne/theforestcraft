@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace ForestCraft
 {
-    [BepInPlugin("dev.forestcraft", "ForestCraft", "0.2.0")]
+    [BepInPlugin("dev.forestcraft", "ForestCraft", "0.3.0")]
     public class Plugin : BaseUnityPlugin
     {
         public static ManualLogSource Log;
@@ -31,11 +31,13 @@ namespace ForestCraft
         void Awake()
         {
             Log = Logger;
+            // No GUILayout here: skipping Unity's layout pass saves an OnGUI call and its garbage every frame.
+            useGUILayout = false;
             sensitivity = Config.Bind("Controls", "MouseSensitivity", 0.75f, "Degrees per unit of Unity mouse axis while Minecraft has the body.");
             invertY = Config.Bind("Controls", "InvertY", false, "Invert vertical mouse look.");
             cursorSpeed = Config.Bind("Controls", "CursorSpeed", 10f, "Speed of the cursor in Minecraft's inventory and chat (pixels per unit of mouse axis at 1080p).");
             CursorSpeed = cursorSpeed.Value;
-            worldScale = Config.Bind("World", "Scale", 0f, "Forest units per Minecraft block. 0 = auto (The Forest eye height / Steve's 1.62, kept between 1 and 1.35). Bigger = you are bigger, but above ~1.35 the plane's door gets too tight.");
+            worldScale = Config.Bind("World", "Scale", 0f, "Forest units per Minecraft block (how big Steve and the blocks are). 0 = auto (The Forest eye height / Steve's 1.62, at most 1.8). Only used for new Minecraft worlds: each world keeps the size it was made with.");
             digCap = Config.Bind("World", "DugGroundLook", "Terrain", "How the ground around holes is drawn: Terrain (The Forest's own ground material) or Grass (Minecraft grass).");
             DigWorld.CapMode = digCap.Value == "Grass" ? "Grass" : "Terrain";
             if (!Link.Create())
@@ -51,15 +53,36 @@ namespace ForestCraft
         void LateUpdate()
         {
             Perf.Frame();
+            try { LateUpdateInner(); }
+            finally { Perf.EndOfOurs(); }
+        }
+
+        void LateUpdateInner()
+        {
             if (!Link.Create()) return;
+            { double pq = Perf.Now(); Session.Update(Link.View); Perf.Add("session", pq); }
+            if (Session.JustStarted)
+            {
+                // Another game (new or loaded): Minecraft opens its own world for it and hands
+                // the body over again; nothing of the previous game's blocks or holes stays.
+                teleportSeq = 0;
+                waitLogged = false;
+                Blocks.ClearAll();
+                DigWorld.ClearAll(Link.View);
+                Caves.TerrainIgnored = false;
+            }
+            // The Forest's frame rate, smoothed: Minecraft renders no more frames than are shown.
+            float dt = Time.unscaledDeltaTime;
+            if (dt > 0f && dt < 1f) forestFps = Mathf.Lerp(forestFps, 1f / dt, 0.05f);
+            Link.WriteFloatAt(0x100 + 200, forestFps);
             Link.Heartbeat();
-            Launcher.Watch();
+            { double pq = Perf.Now(); Launcher.Watch(); Perf.Add("launcher", pq); }
             Vector3 feet = Drive.Feet();
             double x, y, z;
             Link.UnityToMc(feet, out x, out y, out z);
             bool inWorld = Link.ForestInWorld();
             bool scripted = LocalPlayerSafe.Scripted();
-            if (teleportSeq == 0 && inWorld && !scripted) ChooseScale();
+            if (inWorld) ChooseScale();
             Link.UnityToMc(feet, out x, out y, out z);
             // Hand Minecraft the beach, not the plane. A new seq is the only time it may move us.
             // Only the end of a cutscene (or the first arrival) counts: closing the pause menu
@@ -82,7 +105,7 @@ namespace ForestCraft
             bool driving = Link.Driving;
             int fw, fh;
             FrameSize(out fw, out fh);
-            McScreen.Update(Link.View, driving, fw, fh);
+            { double pq = Perf.Now(); McScreen.Update(Link.View, driving, fw, fh); Perf.Add("mcscreen", pq); }
             float yaw = 0f, pitch = 0f;
             Camera cam = LocalPlayerSafe.Camera();
             if (driving && McScreen.Open)
@@ -113,8 +136,10 @@ namespace ForestCraft
             Link.WriteView(driving ? cameraMode : 0, fw, fh, slot, Drive.ThirdPersonDistance);
             if (inWorld && !scripted)
             {
-                Ground.Update();
-                SampleGrid((float)x, (float)z);
+                { double pq = Perf.Now(); Ground.Update(); Perf.Add("ground", pq); }
+                { double pq = Perf.Now(); Caves.Update(feet); Perf.Add("caves", pq); }
+                { double pq = Perf.Now(); SampleGrid((float)x, (float)z); Perf.Add("grid", pq); }
+                { double pq = Perf.Now(); FarGround.Update((float)x, (float)z); Perf.Add("far", pq); }
                 double ps = Perf.Now();
                 Solids.Step(x, y, z);
                 Perf.Add("solids", ps);
@@ -126,27 +151,42 @@ namespace ForestCraft
             double pd = Perf.Now();
             DigWorld.Update(Link.View);
             Perf.Add("dig", pd);
-            Trees.Update(input);
-            Combat.Update(input);
+            { double pq = Perf.Now(); Trees.Update(input); Perf.Add("trees", pq); }
+            { double pq = Perf.Now(); Combat.Update(input); Combat.Arrows(); Combat.UpdatePushes(); Perf.Add("combat", pq); }
             // Minecraft holds the player after a respawn until the colliders around it are known.
             Link.WriteIntAt(0x100 + 132, Solids.NearReady ? 1 : 0);
-            Blocks.ReadHit(Link.View);
+            { double pq = Perf.Now(); Blocks.ReadHit(Link.View); Perf.Add("hit", pq); }
             // Dropped items now come with the other entities (Entities), stacks and all.
-            Cracks.Update(Link.View);
+            { double pq = Perf.Now(); Cracks.Update(Link.View); Perf.Add("cracks", pq); }
             if (driving && !wasDriving) { Log.LogInfo("ForestCraft: Minecraft has the body"); Loot.DumpNames(); }
             wasDriving = driving;
-            if (driving) Drive.Apply(yaw, pitch, cameraMode);
-            else Drive.Release();
+            { double pq = Perf.Now(); if (driving) Drive.Apply(yaw, pitch, cameraMode); else Drive.Release(); Perf.Add("drive", pq); }
             // After Apply: Steve stands exactly where the camera was just placed from.
             double pe = Perf.Now();
             Entities.Update(Link.View, cameraMode != 0, Drive.LastFeet);
             Perf.Add("entities", pe);
+            pe = Perf.Now();
+            Particles.Update(Link.View);
+            Perf.Add("particles", pe);
+            pe = Perf.Now();
+            HeldLight.Update(cameraMode != 0, Drive.LastFeet);
+            Perf.Add("light", pe);
         }
 
         static Light sun;
         static float sunSearchAt;
 
+        public static float LastSunElevation = 45f;
+        static float forestFps = 60f;
+
         static float SunElevation()
+        {
+            float e = SunElevationNow();
+            if (!float.IsNaN(e)) LastSunElevation = e;
+            return e;
+        }
+
+        static float SunElevationNow()
         {
             if ((sun == null || !sun.isActiveAndEnabled) && Time.realtimeSinceStartup >= sunSearchAt)
             {
@@ -165,6 +205,12 @@ namespace ForestCraft
             return Mathf.Asin(Mathf.Clamp(-sun.transform.forward.y, -1f, 1f)) * Mathf.Rad2Deg;
         }
 
+        float wantedScale = 1.8f;
+
+        // Forest units per Minecraft block. Each Minecraft world keeps the size it was made with
+        // (its blocks and holes are placed in blocks: another size would move them all), so the
+        // size wanted here (config, or auto) is only offered to Minecraft for a new world; the
+        // world's own size, published by Minecraft at OFF_MC+196, is the one used.
         void ChooseScale()
         {
             float s = worldScale.Value;
@@ -175,13 +221,26 @@ namespace ForestCraft
             if (cam != null) eye = cam.transform.position.y - Drive.Feet().y;
             if (s <= 0f)
             {
-                s = eye > 0.5f ? eye / 1.62f : 1.2f;
-                // Kept modest: a bigger Steve stops fitting through the plane's door and cabin.
-                s = Mathf.Clamp(s, 1f, 1.5f);
+                s = eye > 0.5f ? eye / 1.62f : 1.8f;
+                // Kept under The Forest's own size (2.7): Minecraft makes Steve's hitbox narrower
+                // as he grows (same width in The Forest as at 1.5), so doors and the cabin still
+                // fit; his height (1.8 blocks) stays under The Forest's 4.7-unit capsule.
+                s = Mathf.Clamp(s, 1f, 1.8f);
             }
-            s = Mathf.Clamp(s, 0.5f, 3f);
-            Link.Scale = s;
-            Log.LogInfo("ForestCraft: Forest eye height " + eye + " units, capsule " + Drive.ForestHeight() + ", scale " + s + " units per block");
+            wantedScale = Mathf.Clamp(s, 0.5f, 3f);
+            Link.WriteFloatAt(0x100 + 232, wantedScale);
+            float world = Link.ReadFloatAt(0x200 + 196);
+            float use = world >= 0.5f && world <= 3f ? world : wantedScale;
+            if (Mathf.Abs(use - Link.Scale) > 1e-4f)
+            {
+                Link.Scale = use;
+                // Everything cached in blocks was measured at the old size.
+                Solids.ForgetAll();
+                FarGround.Reset();
+                DigWorld.TerrainsChanged();
+                Log.LogInfo("ForestCraft: Forest eye height " + eye + " units, capsule " + Drive.ForestHeight() + ", scale " + use
+                    + " units per block" + (world >= 0.5f ? " (this Minecraft world's size)" : " (wanted " + wantedScale + ")"));
+            }
         }
 
         void ReadHotbarAndF5()
@@ -248,6 +307,7 @@ namespace ForestCraft
         readonly float[] corners = new float[(Link.Grid + 1) * (Link.Grid + 1)];
         readonly float[] mins = new float[Link.Grid * Link.Grid];
         readonly float[] maxs = new float[Link.Grid * Link.Grid];
+        readonly byte[] kinds = new byte[Link.Grid * Link.Grid];
         int groundX = int.MinValue, groundZ = int.MinValue, groundTerrains;
 
         void SampleGrid(float mcX, float mcZ)
@@ -275,6 +335,7 @@ namespace ForestCraft
                 Log.LogWarning("ForestCraft: no ground under the player; Minecraft will not take the body");
             }
             Link.PublishGrid(originX, originZ, heights);
+            Water.Update(ox, oz);
             // Corners and per-column extremes: only when the window moves (the original surface never changes).
             if (Ground.Ready && (moved || ox != groundX || oz != groundZ || groundTerrains != Ground.Terrains.Count))
             {
@@ -291,9 +352,10 @@ namespace ForestCraft
                         Ground.MinMaxMc(ox + gx, oz + gz, out lo, out hi);
                         mins[gz * Link.Grid + gx] = lo;
                         maxs[gz * Link.Grid + gx] = hi;
+                        kinds[gz * Link.Grid + gx] = (byte)(Ground.SandMc(ox + gx + 0.5f, oz + gz + 0.5f) ? 1 : 0);
                     }
                 }
-                Link.PublishGround(ox, oz, corners, mins, maxs);
+                Link.PublishGround(ox, oz, corners, mins, maxs, kinds);
             }
         }
 

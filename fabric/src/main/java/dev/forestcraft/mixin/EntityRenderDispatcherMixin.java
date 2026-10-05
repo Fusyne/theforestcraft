@@ -20,16 +20,16 @@ public abstract class EntityRenderDispatcherMixin {
 
 	@Inject(method = SUBMIT, at = @At("HEAD"))
 	private void forestcraft$begin(EntityRenderState state, CameraRenderState camera, double x, double y, double z, PoseStack pose, SubmitNodeCollector collector, CallbackInfo ci) {
-		if (ForestLink.forestInGame()) EntityExport.begin(state, camera);
+		if (EntityExport.capturing()) EntityExport.begin(state, camera);
 	}
 
 	@ModifyVariable(method = SUBMIT, at = @At("HEAD"), argsOnly = true)
 	private SubmitNodeCollector forestcraft$capture(SubmitNodeCollector collector) {
-		return ForestLink.forestInGame() ? EntityExport.collector() : collector;
+		return EntityExport.capturing() ? EntityExport.collector() : collector;
 	}
 
 	@Inject(method = SUBMIT, at = @At("RETURN"))
 	private void forestcraft$end(EntityRenderState state, CameraRenderState camera, double x, double y, double z, PoseStack pose, SubmitNodeCollector collector, CallbackInfo ci) {
-		if (ForestLink.forestInGame()) EntityExport.end();
+		if (EntityExport.capturing()) EntityExport.end();
 	}
 }

@@ -32,16 +32,13 @@ public final class FrameCapture {
 		int width = target.width;
 		int height = target.height;
 		long bytes = (long) width * height * 4L;
-		if (width < 16 || height < 16 || Proto.OFF_FRAME + 16L + bytes > Proto.MAP_BYTES) return;
+		if (width < 16 || height < 16 || Proto.OFF_FRAME + 16L + bytes > Proto.FRAME_END) return;
 		if (staging == null || stageW != width || stageH != height) {
 			if (staging != null) staging.close();
 			staging = RenderSystem.getDevice().createBuffer(() -> "ForestCraft frame", GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_MAP_READ, bytes);
 			stageW = width;
 			stageH = height;
-			if (!logged) {
-				logged = true;
-				ForestLink.LOG.info("capturing Minecraft frame {}x{}", width, height);
-			}
+			ForestLink.LOG.info("capturing Minecraft frame {}x{}", width, height);
 		}
 		state = PENDING;
 		RenderSystem.getDevice().createCommandEncoder().copyTextureToBuffer(color, staging, 0L, () -> state = READY, 0);

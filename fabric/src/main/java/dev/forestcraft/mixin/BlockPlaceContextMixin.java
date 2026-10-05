@@ -33,6 +33,9 @@ public abstract class BlockPlaceContextMixin {
 		BlockPos pos = hit.getBlockPos();
 		if (!level.getBlockState(pos).isAir()) return;
 		if (ForestLink.aimShape(pos.getX(), pos.getY(), pos.getZ()) == null) return;
+		// A cell the ground's surface runs through (a "half block"): the block takes its place,
+		// like placing into tall grass. The ground in it goes (TerrainDig, once it is placed).
+		if (ForestLink.solidShape(pos.getX(), pos.getY(), pos.getZ()) == null && ForestLink.isPartialGround(pos.getX(), pos.getY(), pos.getZ())) return;
 		replaceClicked = false;
 	}
 }

@@ -87,6 +87,8 @@ New-Item -ItemType Directory -Force -Path $modsDir | Out-Null
 Get-ChildItem $modsDir -Filter 'forestcraft*.jar' | Remove-Item -Force
 Copy-Item $jar (Join-Path $modsDir 'forestcraft.jar') -Force
 Ok 'mod forestcraft.jar installe'
+# FerriteCore: less memory for Minecraft, nothing else changes (The Forest runs at the same time).
+Install-ModrinthMod 'ferrite-core' 'ferritecore' $modsDir
 Save-LauncherInfo $prism $FC.InstanceId
 
 # ------------------------------------------------------------ done

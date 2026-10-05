@@ -20,8 +20,12 @@ namespace ForestCraft
         // Samples pushed down under dug cells (index z * res + x -> normalized height).
         public readonly Dictionary<int, float> lowered = new Dictionary<int, float>();
         public int dirtyI0 = int.MaxValue, dirtyI1 = -1, dirtyJ0 = int.MaxValue, dirtyJ1 = -1;
+        // How much of the terrain's sand layers covers each alphamap texel (0..255), [z * sandRes + x], or null.
+        public byte[] sand;
+        public int sandRes;
         public Material[] capMaterials;
         public MaterialPropertyBlock capProps;
+        public Texture2D baseMap; // our stand-in for the base map Unity composes for this terrain
         public bool capChecked;
         public bool lodPending;
 
@@ -76,7 +80,18 @@ namespace ForestCraft
         // longer the island's surface, the ground cap draws it instead.
         public bool InZone(int qi, int qj)
         {
-            return IsLowered(qi, qj) || IsLowered(qi + 1, qj) || IsLowered(qi, qj + 1) || IsLowered(qi + 1, qj + 1);
+            // Further than the quads that moved:
+            //  - Unity lights each terrain vertex with a normal taken from its neighbours' heights,
+            //    so the vertices next to a lowered one lean towards the hole (a light/dark ring);
+            //  - until its LOD is redone (only once the digging stops: it costs a ~120 ms frame),
+            //    Unity draws the terrain with its old simplified triangles, and a lowered point
+            //    drags a bigger one down (a dark slope around the hole).
+            // The cap now matches the ground, so it simply covers all of that: 3 samples around.
+            const int Margin = 3;
+            for (int j = qj - Margin; j <= qj + 1 + Margin; j++)
+                for (int i = qi - Margin; i <= qi + 1 + Margin; i++)
+                    if (IsLowered(i, j)) return true;
+            return false;
         }
     }
 
@@ -134,11 +149,69 @@ namespace ForestCraft
                 copy.SetHeights(0, 0, g.orig);
                 collider.terrainData = copy;
             }
+            SnapshotSand(g);
             Terrains.Add(g);
             Plugin.Log.LogInfo("ForestCraft: ground " + terrain.name + " " + g.res + " samples, spacing " + g.stepX + " units = "
                 + (g.stepX / Link.Scale) + " blocks, snapshot " + watch.ElapsedMilliseconds + " ms");
             LogMaterial(g);
             DigWorld.TerrainsChanged();
+        }
+
+        // The terrain's painted layers whose texture is sand (beaches, dunes): those columns dig as
+        // Minecraft sand. Read once, in strips (the whole alphamap at once is several MB).
+        static void SnapshotSand(GroundTerrain g)
+        {
+            try
+            {
+                SplatPrototype[] splats = g.data.splatPrototypes;
+                int layers = g.data.alphamapLayers;
+                var isSand = new bool[layers];
+                var names = new System.Text.StringBuilder();
+                bool any = false;
+                for (int l = 0; l < layers && l < splats.Length; l++)
+                {
+                    string n = splats[l].texture != null ? splats[l].texture.name : "?";
+                    names.Append(l).Append('=').Append(n).Append(' ');
+                    string low = n.ToLowerInvariant();
+                    isSand[l] = low.Contains("sand") || low.Contains("beach");
+                    if (isSand[l]) any = true;
+                }
+                Plugin.Log.LogInfo("ForestCraft: terrain layers " + names + (any ? "" : "(no sand layer recognised)"));
+                if (!any) return;
+                int res = g.data.alphamapResolution;
+                var sand = new byte[res * res];
+                const int Strip = 32;
+                for (int z0 = 0; z0 < res; z0 += Strip)
+                {
+                    int rows = Mathf.Min(Strip, res - z0);
+                    float[,,] a = g.data.GetAlphamaps(0, z0, res, rows);
+                    for (int z = 0; z < rows; z++)
+                        for (int x = 0; x < res; x++)
+                        {
+                            float w = 0f;
+                            for (int l = 0; l < layers; l++) if (isSand[l]) w += a[z, x, l];
+                            sand[(z0 + z) * res + x] = (byte)Mathf.Clamp(Mathf.RoundToInt(w * 255f), 0, 255);
+                        }
+                }
+                g.sand = sand;
+                g.sandRes = res;
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning("ForestCraft: terrain layers not read: " + e.Message);
+            }
+        }
+
+        // Sand under this point of the island (Minecraft block coordinates)?
+        public static bool SandMc(float x, float z)
+        {
+            float k = Link.Scale;
+            float ux = x * k, uz = -z * k;
+            GroundTerrain g = At(ux, uz);
+            if (g == null || g.sand == null) return false;
+            int i = Mathf.Clamp(Mathf.FloorToInt((ux - g.pos.x) / g.size.x * g.sandRes), 0, g.sandRes - 1);
+            int j = Mathf.Clamp(Mathf.FloorToInt((uz - g.pos.z) / g.size.z * g.sandRes), 0, g.sandRes - 1);
+            return g.sand[j * g.sandRes + i] >= 128;
         }
 
         static void LogMaterial(GroundTerrain g)
@@ -310,7 +383,9 @@ namespace ForestCraft
         // One SetHeights per terrain per frame, over everything lowered since the last one.
         public static void Flush()
         {
-            if (Time.realtimeSinceStartup - lastLowered > 2.5f)
+            // Redoing the LOD costs a ~120 ms frame (Unity rebuilds the terrain's patches): only once
+            // the digging has stopped for 3 s. Meanwhile the cap hides what the old LOD gets wrong.
+            if (Time.realtimeSinceStartup - lastLowered > 3f)
             {
                 for (int t = 0; t < Terrains.Count; t++)
                 {
@@ -340,7 +415,7 @@ namespace ForestCraft
                 }
                 // SetHeights costs ~10 ms however small the patch (Unity redoes the whole terrain's
                 // LOD and trees): that was the hitch on every dig. The heights go in right away
-                // without it; the LOD is caught up once the digging stops for a moment.
+                // without it; the LOD is caught up as soon as the digging pauses.
                 g.data.SetHeightsDelayLOD(g.dirtyI0, g.dirtyJ0, heights);
                 g.lodPending = true;
                 lastLowered = Time.realtimeSinceStartup;

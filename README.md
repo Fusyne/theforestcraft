@@ -51,11 +51,12 @@ What `install.bat` does:
 | I | Minecraft inventory |
 | T, / | chat, command |
 | F5 | third-person view |
+| F9 | how the ground around holes is drawn: The Forest's terrain / Minecraft grass / nothing |
 
 ## Digging
 
-Hold left click on the ground to dig it out one block at a time, like dirt (stone deeper down,
-which needs a pickaxe). The hole is cut exactly into The Forest's terrain: the ground around it
+Hold left click on the ground to dig it out one block at a time, like dirt (sand on the beaches,
+stone deeper down, which needs a pickaxe). The hole is cut exactly into The Forest's terrain: the ground around it
 keeps The Forest's look, and the sides of the hole are dirt faces cut along the surface. Ground
 fully under the surface next to a hole turns into real Minecraft blocks, so you can keep mining
 down or sideways like in Minecraft.
@@ -63,6 +64,30 @@ down or sideways like in Minecraft.
 How the ground around holes is drawn can be changed in
 `The Forest\BepInEx\config\dev.forestcraft.cfg` → `DugGroundLook = Terrain` (The Forest's own
 ground) or `Grass` (Minecraft grass).
+
+## Fighting and hunting
+
+Minecraft's weapons work on The Forest's cannibals and animals: melee hits (with Minecraft's
+damage and attack cooldown) and arrows, which stay planted where they hit. Hit a dead animal to
+cut it up (meat, skin, bones). Picked-up items become their Minecraft counterpart; story items
+(maps, photos, keycards, tapes…) and tools only The Forest can use stay in its inventory.
+
+Minecraft animals and monsters (spawn eggs) walk on The Forest's island and find their way
+around it.
+
+## Size
+
+`Scale` in `dev.forestcraft.cfg` (section `[World]`) sets how big Steve and the blocks are, in
+The Forest's units per block (0 = automatic, 1.8 at most). Each Minecraft world keeps the size
+it was created with (`forestcraft_scale.txt` in the world folder), so blocks and holes never
+move; a new size applies to new games.
+
+## Saves
+
+Each The Forest save slot has its own Minecraft world (blocks, holes, inventory). It is saved
+when you save in The Forest, and loaded with that slot; a new game starts a fresh Minecraft
+world. The worlds are `ForestCraft_Slot1` … `ForestCraft_Slot5` in the Prism instance
+(`ForestCraft_Play` is the one being played).
 
 ## Building from source (developers)
 
@@ -87,8 +112,8 @@ The two games talk through shared memory (`%LOCALAPPDATA%\ForestCraft\link.bin`)
 
 ```bat
 build.bat
-git tag v0.1.0 && git push origin v0.1.0
-gh release create v0.1.0 dist\ForestCraft-0.1.0.zip --title "ForestCraft 0.1.0" --notes "First release"
+git tag v0.3.0 && git push origin v0.3.0
+gh release create v0.3.0 dist\ForestCraft-0.3.0.zip --title "ForestCraft 0.3.0" --notes-file dist\notes.md
 ```
 
 ## License

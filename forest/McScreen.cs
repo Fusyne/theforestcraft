@@ -61,6 +61,7 @@ namespace ForestCraft
         }
 
         static int requestSeq, keysWritten;
+        static readonly int[] downs = new int[3], ups = new int[3];
         static float wheel;
         static readonly Dictionary<KeyCode, int> glfw = BuildKeys();
 
@@ -109,6 +110,15 @@ namespace ForestCraft
             if (UnityEngine.Input.GetMouseButton(1)) buttons |= 2;
             if (UnityEngine.Input.GetMouseButton(2)) buttons |= 4;
             Marshal.WriteInt32(view, 0x100 + 112, buttons);
+            // Presses and releases counted too (one byte per button): a quick click that starts
+            // and ends between two Minecraft frames is not lost.
+            for (int b = 0; b < 3; b++)
+            {
+                if (UnityEngine.Input.GetMouseButtonDown(b)) downs[b]++;
+                if (UnityEngine.Input.GetMouseButtonUp(b)) ups[b]++;
+            }
+            Marshal.WriteInt32(view, 0x100 + 204, (downs[0] & 255) | ((downs[1] & 255) << 8) | ((downs[2] & 255) << 16));
+            Marshal.WriteInt32(view, 0x100 + 208, (ups[0] & 255) | ((ups[1] & 255) << 8) | ((ups[2] & 255) << 16));
             wheel += UnityEngine.Input.mouseScrollDelta.y;
             Link.WriteFloatAt(0x100 + 116, wheel);
 

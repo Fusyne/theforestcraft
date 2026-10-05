@@ -19,6 +19,8 @@ public final class Proto {
 	public static final int MC_SETTLED = 4;
 	public static final int MAP_BYTES = 16 << 20;
 	public static final int OFF_FRAME = 0x200000;
+	/** The frame must end before the far ground grid (0x9F0000): 1920x1080 fits, bigger doesn't. */
+	public static final int FRAME_END = 0x9F0000;
 	public static final int OFF_HEADER = 0x000;
 	public static final int OFF_FOREST = 0x100;
 	public static final int OFF_MC = 0x200;

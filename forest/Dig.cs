@@ -16,7 +16,8 @@ namespace ForestCraft
         static TreeHealth target;
         static int logSeq;
         static bool warned;
-        static string lastName = "?";
+        static Vector3 aimPoint;
+        static Collider lastAimed; // named only when logged (a name is a new string each time)
         static readonly RaycastHit[] hits = new RaycastHit[16];
 
         public static void Update(int input)
@@ -28,7 +29,7 @@ namespace ForestCraft
             TreeHealth tree = Aimed(cam.transform.position, cam.transform.forward, 5.5f * Link.Scale);
             if (tree == null)
             {
-                if (target != null || !warned) { warned = true; Plugin.Log.LogInfo("ForestCraft: aiming at a Forest object without TreeHealth: " + lastName); }
+                if (target != null || !warned) { warned = true; Plugin.Log.LogInfo("ForestCraft: aiming at a Forest object without TreeHealth: " + (lastAimed == null ? "?" : (lastAimed.transform.parent != null ? lastAimed.transform.parent.name + "/" : "") + lastAimed.name)); }
                 target = null;
                 return;
             }
@@ -44,6 +45,7 @@ namespace ForestCraft
             nextHit = now + 0.2f;
             if (tree.Health <= 0) return;
             tree.DamageTree();
+            ForestEvents.Emit(tree.Health <= 0 ? ForestEvents.TreeFelled : ForestEvents.TreeHit, aimPoint);
             if (tree.Health <= 0)
             {
                 logSeq++;
@@ -65,10 +67,10 @@ namespace ForestCraft
                 Collider c = hits[i].collider;
                 if (c == null) continue;
                 if (player != null && c.transform.IsChildOf(player)) continue;
-                if (hits[i].distance < best) lastName = (c.transform.parent != null ? c.transform.parent.name + "/" : "") + c.name;
+                if (hits[i].distance < best) lastAimed = c;
                 TreeHealth th = c.GetComponentInParent<TreeHealth>();
                 if (th == null) continue;
-                if (hits[i].distance < best) { best = hits[i].distance; found = th; }
+                if (hits[i].distance < best) { best = hits[i].distance; found = th; aimPoint = hits[i].point; }
             }
             return found;
         }

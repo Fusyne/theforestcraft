@@ -20,7 +20,13 @@ namespace ForestCraft
                 if (body != null && body.parent != null) return true;
                 FirstPersonCharacter fpc = LocalPlayer.FpCharacter;
                 if (fpc != null && fpc.Locked) return true;
-                if (crash == null) crash = UnityEngine.Object.FindObjectOfType<PlaneCrashController>();
+                // FindObjectOfType walks every object in the scene: once the plane is gone it was
+                // searched for every frame. Look again only every few seconds.
+                if (crash == null && Time.realtimeSinceStartup >= nextCrashSearch)
+                {
+                    nextCrashSearch = Time.realtimeSinceStartup + 5f;
+                    crash = UnityEngine.Object.FindObjectOfType<PlaneCrashController>();
+                }
                 if (crash != null && !crash.Crashed) return true;
             }
             catch { }
@@ -28,6 +34,7 @@ namespace ForestCraft
         }
 
         static PlaneCrashController crash;
+        static float nextCrashSearch;
 
         public static bool InMenu()
         {
@@ -123,7 +130,9 @@ namespace ForestCraft
                 // PhysX must not integrate a velocity of its own, or it walks the body
                 // forward and the next Minecraft sample pulls it back.
                 body.isKinematic = true;
-                body.detectCollisions = false;
+                // Kinematic, so nothing pushes it; but its colliders stay on: The Forest's own
+                // triggers (cave entrances, water, areas) must still see the player go through.
+                body.detectCollisions = true;
                 body.interpolation = RigidbodyInterpolation.None;
                 body.velocity = Vector3.zero;
                 body.angularVelocity = Vector3.zero;
@@ -266,6 +275,7 @@ namespace ForestCraft
         // equipped later, armor...) stays hidden while Minecraft has the body. Re-checked a few
         // times a second, not only once: items equipped afterwards used to float above Steve.
         static readonly System.Collections.Generic.List<Renderer> hidden = new System.Collections.Generic.List<Renderer>();
+        static readonly System.Collections.Generic.List<Renderer> scan = new System.Collections.Generic.List<Renderer>(512);
         static float nextHideScan;
 
         static void HideBody()
@@ -282,10 +292,13 @@ namespace ForestCraft
         static void HideUnder(Transform t, bool meshesOnly = false)
         {
             if (t == null) return;
-            Renderer[] renderers = t.GetComponentsInChildren<Renderer>(true);
-            for (int i = 0; i < renderers.Length; i++)
+            // The player carries hundreds of renderers (every item it can hold): fill a reused
+            // list rather than allocating an array 4 times a second (garbage = GC hitches).
+            scan.Clear();
+            t.GetComponentsInChildren<Renderer>(true, scan);
+            for (int i = 0; i < scan.Count; i++)
             {
-                Renderer r = renderers[i];
+                Renderer r = scan[i];
                 if (r == null || !r.enabled) continue;
                 // Under the camera only models (held items, arms): rain, splashes and other
                 // camera effects are particles and must keep showing.

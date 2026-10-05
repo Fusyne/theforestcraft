@@ -113,9 +113,27 @@ namespace ForestCraft
             return now >= beat && now - beat < 2000;
         }
 
+        static int drivingFrame = -1;
+        static int lastMoved = int.MinValue;
+        static float movedAt = -100f;
+        static bool drivingCached;
+
+        // Asked many times a frame (and by the input patches, for every button The Forest
+        // polls): worked out once per frame.
         public static bool Driving
         {
             get
+            {
+                int frame = Time.frameCount;
+                if (frame == drivingFrame) return drivingCached;
+                drivingCached = DrivingNow();
+                drivingFrame = frame;
+                return drivingCached;
+            }
+        }
+
+        static bool DrivingNow()
+        {
             {
                 // SkyCraft's rule: once Minecraft has arrived, it owns the body, including jumps.
                 // Releasing on every airborne tick is what snapped the player back to The Forest.
@@ -131,8 +149,14 @@ namespace ForestCraft
                     puppetLatched = false;
                     return false;
                 }
+                // A respawn moves the body far away in one go (Minecraft counts those at +188):
+                // the puppet follows it; only an unannounced drop means Minecraft fell through.
+                int moved = ReadMcInt(188);
+                if (lastMoved == int.MinValue) lastMoved = moved;
+                else if (moved != lastMoved) { lastMoved = moved; movedAt = Time.realtimeSinceStartup; }
+                bool justMoved = Time.realtimeSinceStartup - movedAt < 15f;
                 Vector3 gap = McToUnity(mc.x, mc.y, mc.z) - Drive.Feet();
-                if (gap.y < -5f)
+                if (gap.y < -5f && !justMoved)
                 {
                     puppetLatched = false;
                     return false;
@@ -187,6 +211,11 @@ namespace ForestCraft
         public static float ReadFloatAt(int absolute)
         {
             return view == IntPtr.Zero ? 0f : ReadFloat(absolute);
+        }
+
+        public static int ReadIntAt(int absolute)
+        {
+            return view == IntPtr.Zero ? 0 : ReadInt(absolute);
         }
 
         public static int ReadMcInt(int offset)
@@ -286,12 +315,7 @@ namespace ForestCraft
             WriteInt(OffGrid + 4, originX);
             WriteInt(OffGrid + 8, originZ);
             WriteInt(OffGrid + 12, Grid);
-            int at = OffGrid + 16;
-            for (int i = 0; i < heights.Length; i++)
-            {
-                WriteFloat(at, heights[i]);
-                at += 4;
-            }
+            Marshal.Copy(heights, 0, new IntPtr(view.ToInt64() + OffGrid + 16), heights.Length);
             WriteInt(OffGrid, seq + 1);
         }
 
@@ -299,7 +323,7 @@ namespace ForestCraft
 
         // The original surface in detail around the player: heights at block corners
         // ((Grid+1)^2) and each column's lowest and highest point (Grid^2 each), Minecraft units.
-        public static void PublishGround(int originX, int originZ, float[] corners, float[] mins, float[] maxs)
+        public static void PublishGround(int originX, int originZ, float[] corners, float[] mins, float[] maxs, byte[] kinds)
         {
             if (view == IntPtr.Zero) return;
             int seq = ReadInt(OffGround) + 1;
@@ -309,9 +333,11 @@ namespace ForestCraft
             WriteInt(OffGround + 8, originZ);
             WriteInt(OffGround + 12, Grid);
             int at = OffGround + 16;
-            for (int i = 0; i < corners.Length; i++) { WriteFloat(at, corners[i]); at += 4; }
-            for (int i = 0; i < mins.Length; i++) { WriteFloat(at, mins[i]); at += 4; }
-            for (int i = 0; i < maxs.Length; i++) { WriteFloat(at, maxs[i]); at += 4; }
+            Marshal.Copy(corners, 0, new IntPtr(view.ToInt64() + at), corners.Length); at += corners.Length * 4;
+            Marshal.Copy(mins, 0, new IntPtr(view.ToInt64() + at), mins.Length); at += mins.Length * 4;
+            Marshal.Copy(maxs, 0, new IntPtr(view.ToInt64() + at), maxs.Length);
+            // What each column is made of (0 dirt, 1 sand), Grid^2 bytes at +0x3200.
+            if (kinds != null) Marshal.Copy(kinds, 0, new IntPtr(view.ToInt64() + OffGround + 0x3200), Math.Min(kinds.Length, Grid * Grid));
             WriteInt(OffGround, seq + 1);
         }
 
@@ -367,6 +393,31 @@ namespace ForestCraft
             // and then cut every dark pixel out of the inventory.)
             raw = frameRaw;
             return true;
+        }
+
+        /// <summary>
+        /// A new Minecraft frame, as a pointer into the shared memory (no 8 MB copy into a managed
+        /// array first): the texture loads straight from it. seq is checked again afterwards
+        /// with FrameStillSame; a frame overwritten meanwhile is loaded again next time.
+        /// </summary>
+        public static bool NewFrame(int lastSeq, out IntPtr pixels, out int seq, out int width, out int height)
+        {
+            pixels = IntPtr.Zero; seq = 0; width = 0; height = 0;
+            if (view == IntPtr.Zero) return false;
+            seq = ReadInt(OffFrame);
+            if ((seq & 1) != 0 || seq == 0 || seq == lastSeq) return false;
+            int w = ReadInt(OffFrame + 4);
+            int h = ReadInt(OffFrame + 8);
+            if (w < 16 || h < 16 || w * h > 1920 * 1080) return false;
+            width = w;
+            height = h;
+            pixels = new IntPtr(view.ToInt64() + OffFrame + 16);
+            return true;
+        }
+
+        public static bool FrameStillSame(int seq)
+        {
+            return view != IntPtr.Zero && ReadInt(OffFrame) == seq;
         }
 
         static bool KeyFrame(byte[] src, int w, int h, out Color32[] pixels)
@@ -441,10 +492,15 @@ namespace ForestCraft
 
         static void WriteInt(int offset, int value) { Marshal.WriteInt32(view, offset, value); }
         static void WriteLong(int offset, long value) { Marshal.WriteInt64(view, offset, value); }
-        static void WriteFloat(int offset, float value) { Marshal.WriteInt32(view, offset, BitConverter.ToInt32(BitConverter.GetBytes(value), 0)); }
+        // float <-> int bits without BitConverter.GetBytes (a new byte[] per call: thousands per
+        // frame here, it was most of the garbage behind the ~100 ms collections).
+        [StructLayout(LayoutKind.Explicit)]
+        struct Bits { [FieldOffset(0)] public float f; [FieldOffset(0)] public int i; }
+
+        static void WriteFloat(int offset, float value) { Bits b = default(Bits); b.f = value; Marshal.WriteInt32(view, offset, b.i); }
         static void WriteDouble(int offset, double value) { Marshal.WriteInt64(view, offset, BitConverter.DoubleToInt64Bits(value)); }
         static int ReadInt(int offset) { return Marshal.ReadInt32(view, offset); }
-        static float ReadFloat(int offset) { return BitConverter.ToSingle(BitConverter.GetBytes(Marshal.ReadInt32(view, offset)), 0); }
+        static float ReadFloat(int offset) { Bits b = default(Bits); b.i = Marshal.ReadInt32(view, offset); return b.f; }
         static double ReadDouble(int offset) { return BitConverter.Int64BitsToDouble(Marshal.ReadInt64(view, offset)); }
 
         [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]

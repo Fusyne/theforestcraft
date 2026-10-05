@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace ForestCraft
@@ -52,15 +53,13 @@ namespace ForestCraft
         {
             if (Event.current == null || Event.current.type != EventType.Repaint) return;
             if (!Link.Driving) return;
-            int w, h;
-            byte[] raw;
-            bool keyed;
-            Color32[] pixels;
-            if (Link.ReadFrameRaw(ref lastSeq, out raw, out pixels, out keyed, out w, out h))
+            int w, h, seq;
+            IntPtr pixels;
+            if (Link.NewFrame(lastSeq, out pixels, out seq, out w, out h))
             {
                 if (tex == null || tex.width != w || tex.height != h)
                 {
-                    if (tex != null) Object.Destroy(tex);
+                    if (tex != null) UnityEngine.Object.Destroy(tex);
                     // linear: true -> no sRGB decode on sampling. In a linear-space project an
                     // sRGB texture is darkened when sampled and IMGUI writes it out as is: that was
                     // the "too dark" HUD. Minecraft's bytes are display-ready; keep them as they are.
@@ -70,9 +69,10 @@ namespace ForestCraft
                     tex.filterMode = FilterMode.Point;
                 }
                 // Minecraft clears to transparent: its own alpha is the mask, no per-pixel work.
-                if (!keyed) tex.LoadRawTextureData(raw);
-                else tex.SetPixels32(pixels);
+                tex.LoadRawTextureData(pixels, w * h * 4);
                 tex.Apply(false);
+                // Overwritten while loading: keep lastSeq so the next frame loads it again.
+                if (Link.FrameStillSame(seq)) lastSeq = seq;
             }
             if (tex != null)
             {

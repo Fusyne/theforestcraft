@@ -52,6 +52,18 @@ namespace ForestCraft
             return missing;
         }
 
+        // Everything changed around here (cave floors switched on or off): rescan all blocks,
+        // nearest first and fast, but keep using what is known until each one is redone, so the
+        // floor never vanishes for a frame under Minecraft's feet.
+        static float staleBefore = -1f, boostUntil = -1f;
+        public static void MarkStale()
+        {
+            float now = Time.realtimeSinceStartup;
+            staleBefore = now;
+            boostUntil = now + 1.5f;
+            verdict.Clear();
+        }
+
         public static void ForgetAll()
         {
             cache.Clear();
@@ -104,7 +116,7 @@ namespace ForestCraft
             // Before Minecraft has the body, scan much faster: the handover waits for this.
             // Before Minecraft has the body, or after a jump (respawn) until the new place is
             // known, scan much faster: Minecraft holds the player still meanwhile.
-            int budget = Link.Driving && NearReady ? Budget : Budget * 8;
+            int budget = Link.Driving && NearReady && now >= boostUntil ? Budget : Budget * 8;
             for (int n = 0; n < order.Length; n++)
             {
                 int i = order[n];
@@ -115,7 +127,7 @@ namespace ForestCraft
                 Entry e;
                 bool have = cache.TryGetValue(key, out e);
                 bool near = n < 300;
-                if (!have || (near && now - e.at > Stale))
+                if (!have || e.at < staleBefore || (near && now - e.at > Stale))
                 {
                     if (queries >= budget) { Put(i, have ? e.mask : null); continue; }
                     e.mask = Scan(bx, by, bz);
@@ -165,8 +177,11 @@ namespace ForestCraft
         }
 
         // Cube of `size` eighths starting at eighth (qx, qy, qz) inside the block.
-        // Leaf cells are tested slightly smaller than they are, so a wall only fattens by
-        // what it really touches: tight spots (the plane's door, the cabin) stay passable.
+        // Leaf cells are tested narrower than they are (but full height), so a wall only fattens
+        // by what it really touches: tight spots (the plane's door, the cabin) stay passable.
+        // Full height matters: with shrunken leaves in Y too, a thin, nearly flat floor (the
+        // plane's cabin, a mesh with no thickness) could pass between two layers of tests and
+        // leave a strip of floor missing, through which Minecraft fell.
         static bool Any(int bx, int by, int bz, int qx, int qy, int qz, int size)
         {
             queries++;
@@ -175,9 +190,12 @@ namespace ForestCraft
             float cy = by + qy * 0.125f + s * 0.5f;
             float cz = bz + qz * 0.125f + s * 0.5f;
             float k = Link.Scale;
-            float h = (size == 1 ? s * 0.4f : s * 0.5f - 0.002f) * k;
+            // Bigger cubes are only a test for "anything here?": they overlap a hair, so nothing
+            // lying exactly on a block boundary is missed.
+            float h = (size == 1 ? s * 0.4f : s * 0.5f + 0.002f) * k;
+            float hy = (size == 1 ? s * 0.5f : s * 0.5f + 0.002f) * k;
             Vector3 center = new Vector3(cx * k, cy * k, -cz * k);
-            int n = Physics.OverlapBoxNonAlloc(center, new Vector3(h, h, h), hits, Quaternion.identity, ~0, QueryTriggerInteraction.Ignore);
+            int n = Physics.OverlapBoxNonAlloc(center, new Vector3(h, hy, h), hits, Quaternion.identity, ~0, QueryTriggerInteraction.Ignore);
             for (int i = 0; i < n; i++)
             {
                 if (Solid(hits[i])) return true;
@@ -204,6 +222,22 @@ namespace ForestCraft
         static int logged;
         static readonly HashSet<int> seen = new HashSet<int>();
 
+        /// <summary>The Forest colliders Minecraft collides with inside this box, for the log.</summary>
+        public static string Describe(Vector3 center, Vector3 half)
+        {
+            var sb = new System.Text.StringBuilder();
+            int n = Physics.OverlapBoxNonAlloc(center, half, hits, Quaternion.identity, ~0, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < n; i++)
+            {
+                Collider c = hits[i];
+                if (!Solid(c)) continue;
+                MeshCollider m = c as MeshCollider;
+                sb.Append(" | ").Append(c.GetType().Name).Append(" '").Append(Path(c.transform)).Append("' layer ").Append(c.gameObject.layer)
+                  .Append(m != null ? (m.convex ? " convex" : " concave") : "").Append(" size ").Append(c.bounds.size);
+            }
+            return sb.Length == 0 ? " nothing of The Forest (Minecraft blocks or the island's ground?)" : sb.ToString();
+        }
+
         static string Path(Transform t)
         {
             string p = t.name;
@@ -214,6 +248,7 @@ namespace ForestCraft
         static bool Judge(Collider c)
         {
             if (c is TerrainCollider) return false;      // the heightmap already covers it
+            if (Blocks.IsOurs(c.transform)) return false; // Minecraft's own blocks, given back as colliders
             if (c is CharacterController) return false;  // creatures
             if (player != null && c.transform.IsChildOf(player)) return false;
             // The Forest's own collision matrix: rain blockers and the like never stop the player.

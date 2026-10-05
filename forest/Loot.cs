@@ -23,27 +23,70 @@ namespace ForestCraft
         static int written;
         public static PickUp Hovered; // the pickup The Forest shows a "take" icon for
 
-        // Forest item name (lowercase, "contains") -> Minecraft item id. First match wins.
+        // Forest item name (as in forest_items.txt, any case) -> Minecraft item id.
+        // Names not listed stay in The Forest's inventory.
         static readonly string[,] Table =
         {
-            { "planeaxe", "stone_axe" }, { "modernaxe", "iron_axe" }, { "climbingaxe", "iron_pickaxe" },
-            { "chainsaw", "diamond_axe" }, { "craftedaxe", "stone_axe" }, { "axe", "stone_axe" },
-            { "katana", "iron_sword" }, { "machete", "iron_sword" }, { "sword", "iron_sword" },
-            { "club", "wooden_sword" }, { "spear", "wooden_sword" },
-            { "arrow", "arrow" }, { "bow", "bow" },
-            { "stick", "stick" }, { "rock", "cobblestone" }, { "stone", "cobblestone" }, { "log", "oak_log" },
-            { "leaf", "oak_leaves" }, { "rope", "string" }, { "cloth", "white_wool" }, { "feather", "feather" },
-            { "skull", "skeleton_skull" }, { "bone", "bone" }, { "tooth", "bone_meal" }, { "sap", "slime_ball" },
-            { "coin", "gold_nugget" }, { "battery", "redstone" }, { "flaregun", "fire_charge" }, { "flare", "torch" },
-            { "lighter", "flint_and_steel" }, { "torch", "torch" }, { "molotov", "fire_charge" },
-            { "dynamite", "tnt" }, { "bomb", "tnt" }, { "booze", "potion" }, { "soda", "honey_bottle" },
-            { "snack", "cookie" }, { "candy", "cookie" }, { "cereal", "bread" }, { "cooked", "cooked_beef" },
-            { "meat", "beef" }, { "fish", "cod" }, { "berr", "sweet_berries" }, { "mushroom", "brown_mushroom" },
-            { "egg", "egg" }, { "aloe", "green_dye" }, { "coneflower", "purple_dye" }, { "chicory", "light_blue_dye" },
-            { "marigold", "yellow_dye" }, { "seed", "wheat_seeds" }, { "skin", "leather" }, { "fur", "rabbit_hide" },
-            { "turtle", "turtle_scute" }, { "watch", "clock" }, { "compass", "compass" }, { "map", "map" },
-            { "rebreather", "turtle_helmet" }, { "cassette", "music_disc_cat" },
+            // tools and weapons
+            { "Axe Plane", "stone_axe" }, { "AxeRusty", "stone_axe" }, { "AxeCrafted", "stone_axe" },
+            { "AxeModern", "iron_axe" }, { "Chainsaw", "diamond_axe" },
+            { "Katana", "iron_sword" }, { "Machete", "iron_sword" },
+            { "Club", "wooden_sword" }, { "ClubCrafted", "wooden_sword" },
+            { "Spear", "wooden_sword" }, { "SpearUpgraded", "stone_sword" },
+            { "Bow", "bow" }, { "RecurveBow", "bow" }, { "BowCross", "crossbow" }, { "FlintLock", "crossbow" },
+            { "Arrows", "arrow" }, { "CrossbowAmmo", "arrow" }, { "flintlockAmmo", "iron_nugget" },
+            { "Lighter", "flint_and_steel" }, { "Compass", "compass" }, { "Watch", "clock" },
+            { "PaintBrush", "brush" }, { "Pouch", "bundle" }, { "Walkman", "jukebox" },
+            // fire and explosives
+            { "Flare", "torch" }, { "FireStick", "torch" }, { "PlasticTorch", "torch" },
+            { "FlareGun", "fire_charge" }, { "FlareGunAmmo", "fire_charge" }, { "Molotov", "fire_charge" },
+            { "dynamite", "tnt" }, { "BombTimed", "tnt" }, { "HeadBomb", "tnt" },
+            // materials
+            { "Stick", "stick" }, { "StickUpgraded", "stick" }, { "Log", "oak_log" }, { "Leaf", "oak_leaves" },
+            { "Rock", "cobblestone" }, { "RockUpgraded", "cobblestone" }, { "Small Rock", "cobblestone" },
+            { "Rope", "string" }, { "Cloth", "white_wool" }, { "Feather", "feather" }, { "TapeSticky", "slime_ball" },
+            { "TreeSap", "slime_ball" }, { "bone", "bone" }, { "Tooth", "bone_meal" }, { "Skull", "skeleton_skull" },
+            { "Battery", "redstone" }, { "CBoard", "redstone" }, { "Fuel", "coal" }, { "Glass", "glass_bottle" },
+            { "Coins", "gold_nugget" }, { "Cash", "emerald" }, { "TurtleShell", "turtle_scute" },
+            { "BluePaint", "blue_dye" }, { "OrangePaint", "orange_dye" }, { "Tennis Ball", "snowball" },
+            { "LizardSkin", "leather" }, { "DeerSkin", "leather" }, { "BoarSkin", "leather" },
+            { "RacoonSkin", "leather" }, { "CreepySkin", "leather" }, { "RabbitSkin", "rabbit_hide" },
+            // armour
+            { "Rebreather", "turtle_helmet" }, { "StealthArmor", "leather_chestplate" }, { "Warmsuit", "leather_chestplate" },
+            { "BoneArmor", "chainmail_chestplate" }, { "SnowShoes", "leather_boots" }, { "RabbitFurBoots", "leather_boots" },
+            // food and medicine
+            { "Meds", "golden_apple" }, { "MedicineCrafted", "golden_apple" }, { "MedicineCraftedPlus", "golden_apple" },
+            { "EnergyMix", "honey_bottle" }, { "EnergyMixPlus", "honey_bottle" }, { "Soda", "honey_bottle" },
+            { "Booze", "potion" }, { "ChocolateBar", "cookie" }, { "PlaneFood", "bread" },
+            { "GenericMeat", "beef" }, { "SmallGenericMeat", "porkchop" }, { "Lizard", "rabbit" }, { "Rabbit Dead", "rabbit" },
+            { "Rabbit Alive", "rabbit_spawn_egg" }, { "Cod", "cod" }, { "Oyster", "cod" },
+            { "BlueBerry", "sweet_berries" }, { "BlackBerry", "sweet_berries" }, { "twinberry", "glow_berries" }, { "SnowBerry", "glow_berries" },
+            { "MushroomAmanita", "red_mushroom" }, { "MushroomChanterelle", "brown_mushroom" }, { "MushroomJack", "brown_mushroom" },
+            { "MushroomDeerMush", "brown_mushroom" }, { "MushroomLibertyCap", "brown_mushroom" }, { "MushroomPuffmush", "brown_mushroom" },
+            // plants and seeds
+            { "Marigold", "dandelion" }, { "ConeFlower", "allium" }, { "Chicory", "cornflower" }, { "Aloe", "green_dye" },
+            { "Seed_Aloe", "wheat_seeds" }, { "Seed_Coneflower", "beetroot_seeds" }, { "Seed_BlueBerry", "sweet_berries" },
+            // cannibals
+            { "Head", "zombie_head" }, { "Arm", "rotten_flesh" }, { "Leg", "rotten_flesh" },
+            // music
+            { "Cassette 1", "music_disc_cat" }, { "Cassette 2", "music_disc_blocks" }, { "Cassette 3", "music_disc_chirp" },
+            { "Cassette 4", "music_disc_far" }, { "Cassette 5", "music_disc_mall" },
         };
+
+        // Kept by The Forest on purpose: the story (maps, photos, keycards, toys, tapes...) and what
+        // only works there (climbing axe, survival book, bags, quiver, pot, waterskin...).
+        static readonly string[] ForestOnlyPrefixes =
+        {
+            "axe climbing", "survivalbook", "flintlock part", "map", "cavemap", "photo", "polaroid", "page", "biblepage",
+            "bible", "megan", "camcorder", "magazine", "animalhead_", "creepyhead_", "toy", "sketch", "keycard",
+            "artifact", "email", "shippingmanifest", "passengermanifest", "restrainingorder", "terminationletter",
+            "morguereport", "newspaper", "timmydrawing", "fortune", "bookdarkhaired", "chainsawad", "cross",
+            "rockbag", "stickbag", "smallrockbag", "spearbag", "quiver", "pot", "waterskin", "aircanister",
+            "repairtool", "pedometer", "walkytalky", "hairspray", "metaltintray", "slingshot", "tennisraquet",
+            "milkcarton",
+        };
+
+        static Dictionary<string, string> byName;
 
         public static void Reset(IntPtr view)
         {
@@ -54,10 +97,26 @@ namespace ForestCraft
         public static string MinecraftFor(string forestName)
         {
             if (string.IsNullOrEmpty(forestName)) return null;
-            string n = forestName.ToLowerInvariant();
-            for (int i = 0; i < Table.GetLength(0); i++)
-                if (n.Contains(Table[i, 0])) return "minecraft:" + Table[i, 1];
+            if (byName == null)
+            {
+                byName = new Dictionary<string, string>();
+                for (int i = 0; i < Table.GetLength(0); i++) byName[Table[i, 0].Trim().ToLowerInvariant()] = "minecraft:" + Table[i, 1];
+            }
+            string n = forestName.Trim().ToLowerInvariant();
+            string id;
+            if (byName.TryGetValue(n, out id)) return id;
+            // The Forest's held torch variants (PlasticTorch_Bow...) are torches.
+            if (n.StartsWith("plastictorch")) return "minecraft:torch";
             return null;
+        }
+
+        /// <summary>Stays in The Forest on purpose (story item, or only useful there).</summary>
+        public static bool ForestOnly(string forestName)
+        {
+            if (string.IsNullOrEmpty(forestName)) return false;
+            string n = forestName.Trim().ToLowerInvariant();
+            foreach (string p in ForestOnlyPrefixes) if (n.StartsWith(p)) return true;
+            return false;
         }
 
         public static void Give(string id, int count)
@@ -87,7 +146,7 @@ namespace ForestCraft
                 foreach (Item item in ItemDatabase.Items)
                 {
                     if (item == null) continue;
-                    lines.Add(item._id + "\t" + item._name + "\t" + (MinecraftFor(item._name) ?? "-"));
+                    lines.Add(item._id + "\t" + item._name + "\t" + (MinecraftFor(item._name) ?? (ForestOnly(item._name) ? "(The Forest)" : "-")));
                 }
                 File.WriteAllLines(Path.Combine(Path.GetDirectoryName(Link.FilePath), "forest_items.txt"), lines.ToArray());
                 Plugin.Log.LogInfo("ForestCraft: " + lines.Count + " Forest item names written to forest_items.txt");
@@ -122,7 +181,7 @@ namespace ForestCraft
             string id = Loot.MinecraftFor(name);
             if (id == null)
             {
-                Plugin.Log.LogInfo("ForestCraft: picked up " + name + " x" + amount + " (no Minecraft match, kept by The Forest)");
+                Plugin.Log.LogInfo("ForestCraft: picked up " + name + " x" + amount + (Loot.ForestOnly(name) ? " (kept by The Forest: needed there)" : " (no Minecraft match, kept by The Forest)"));
                 return true;
             }
             Loot.Give(id, amount);

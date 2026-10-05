@@ -24,6 +24,7 @@
     <Reference Include="UnityEngine"><HintPath>$(ForestManaged)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Assembly-CSharp"><HintPath>$(ForestManaged)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="bolt"><HintPath>$(ForestManaged)\bolt.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="TheForest.Commons"><HintPath>$(ForestManaged)\TheForest.Commons.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Assembly-CSharp-firstpass"><HintPath>$(ForestManaged)\Assembly-CSharp-firstpass.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 </Project>

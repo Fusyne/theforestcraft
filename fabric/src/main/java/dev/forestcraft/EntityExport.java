@@ -99,7 +99,7 @@ public final class EntityExport {
 		}
 	}
 
-	private static int textureId(Identifier id) {
+	static int textureId(Identifier id) {
 		if (id == null) return Integer.MIN_VALUE;
 		if (TextureAtlas.LOCATION_BLOCKS.equals(id)) return -1; // already in The Forest
 		if (TextureAtlas.LOCATION_ITEMS.equals(id)) return -2;
@@ -238,6 +238,14 @@ public final class EntityExport {
 	private static SubmitNodeCollector collector;
 
 	/** The collector a living entity renders into while The Forest draws it. */
+	/** Set while Minecraft draws an entity into a screen (Steve in the inventory). */
+	public static boolean inGui;
+
+	/** Entities in the world go to The Forest; the one drawn in a screen stays in Minecraft's. */
+	public static boolean capturing() {
+		return !inGui && ForestLink.forestInGame();
+	}
+
 	public static SubmitNodeCollector collector() {
 		if (collector != null) return collector;
 		InvocationHandler handler = new InvocationHandler() {

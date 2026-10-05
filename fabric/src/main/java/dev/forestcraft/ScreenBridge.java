@@ -53,6 +53,7 @@ public final class ScreenBridge {
 				else if (kind == 2) minecraft.setScreenAndShow(new ChatScreen("", false));
 				else if (kind == 3) minecraft.setScreenAndShow(new ChatScreen("/", false));
 				lastButtons = 0;
+				lastDowns = Integer.MIN_VALUE;
 				lastWheel = Float.NaN;
 				keysRead = written;
 				mods = 0;
@@ -60,7 +61,7 @@ public final class ScreenBridge {
 		}
 		boolean open = minecraft.gui.screen() != null;
 		map.putInt(Proto.OFF_MC + 160, open ? 1 : 0);
-		if (!open) { keysRead = written; return; }
+		if (!open) { keysRead = written; lastDowns = Integer.MIN_VALUE; return; }
 
 		// Cursor arrives as a fraction of The Forest's screen (0..1 from top-left): no guessing
 		// about the hidden window's real size. The mouse handler gets it in window pixels (hover
@@ -80,20 +81,30 @@ public final class ScreenBridge {
 		}
 		lastGx = gx; lastGy = gy;
 		int buttons = map.getInt(Proto.OFF_FOREST + 112);
+		int downs = map.getInt(Proto.OFF_FOREST + 204), ups = map.getInt(Proto.OFF_FOREST + 208);
+		if (lastDowns == Integer.MIN_VALUE) { lastDowns = downs; lastUps = ups; }
+		int state = lastButtons;
 		for (int b = 0; b < 3; b++) {
-			boolean was = (lastButtons & (1 << b)) != 0, now = (buttons & (1 << b)) != 0;
-			if (was == now || minecraft.gui.screen() != screen) continue;
-			MouseButtonEvent event = new MouseButtonEvent(gx, gy, new MouseButtonInfo(b, mods));
-			if (now) {
-				long t = System.currentTimeMillis();
-				boolean doubleClick = b == lastClickButton && t - lastClickTime < 250;
-				lastClickButton = b;
-				lastClickTime = t;
-				screen.mouseClicked(event, doubleClick);
-			} else {
-				screen.mouseReleased(event);
+			// Every press and release The Forest saw since last frame, in order: a quick click
+			// between two Minecraft frames still clicks. Then the held state wins.
+			int d = ((downs >>> (b * 8)) - (lastDowns >>> (b * 8))) & 255;
+			int u = ((ups >>> (b * 8)) - (lastUps >>> (b * 8))) & 255;
+			if (d > 4 || u > 4) { d = 0; u = 0; } // out of step: trust the state only
+			boolean down = (state & (1 << b)) != 0;
+			for (int n = 0; n < 8 && (d > 0 || u > 0); n++) {
+				if (minecraft.gui.screen() != screen) break;
+				if (!down && d > 0) { press(screen, b, gx, gy); d--; down = true; }
+				else if (down && u > 0) { screen.mouseReleased(new MouseButtonEvent(gx, gy, new MouseButtonInfo(b, mods))); u--; down = false; }
+				else break;
+			}
+			boolean now = (buttons & (1 << b)) != 0;
+			if (down != now && minecraft.gui.screen() == screen) {
+				if (now) press(screen, b, gx, gy);
+				else screen.mouseReleased(new MouseButtonEvent(gx, gy, new MouseButtonInfo(b, mods)));
 			}
 		}
+		lastDowns = downs;
+		lastUps = ups;
 		lastButtons = buttons;
 		float wheel = map.getFloat(Proto.OFF_FOREST + 116);
 		if (!Float.isNaN(lastWheel) && wheel != lastWheel && minecraft.gui.screen() == screen) screen.mouseScrolled(gx, gy, 0, wheel - lastWheel);
@@ -115,6 +126,16 @@ public final class ScreenBridge {
 			if (action != 0) current.keyPressed(new KeyEvent(code, 0, mods));
 			else current.keyReleased(new KeyEvent(code, 0, mods));
 		}
+	}
+
+	private static int lastDowns = Integer.MIN_VALUE, lastUps;
+
+	private static void press(net.minecraft.client.gui.screens.Screen screen, int b, double gx, double gy) {
+		long t = System.currentTimeMillis();
+		boolean doubleClick = b == lastClickButton && t - lastClickTime < 250;
+		lastClickButton = b;
+		lastClickTime = t;
+		screen.mouseClicked(new MouseButtonEvent(gx, gy, new MouseButtonInfo(b, mods)), doubleClick);
 	}
 
 	/** True while a Minecraft screen is open (mouse must not turn the player then). */

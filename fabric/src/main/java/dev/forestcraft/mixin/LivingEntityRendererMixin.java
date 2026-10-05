@@ -24,16 +24,16 @@ public abstract class LivingEntityRendererMixin {
 
 	@Inject(method = SUBMIT, at = @At("HEAD"))
 	private void forestcraft$begin(LivingEntityRenderState state, PoseStack pose, SubmitNodeCollector collector, CameraRenderState camera, CallbackInfo ci) {
-		if (ForestLink.forestInGame()) EntityExport.begin(state, camera);
+		if (EntityExport.capturing()) EntityExport.begin(state, camera);
 	}
 
 	@ModifyVariable(method = SUBMIT, at = @At("HEAD"), argsOnly = true)
 	private SubmitNodeCollector forestcraft$capture(SubmitNodeCollector collector) {
-		return ForestLink.forestInGame() ? EntityExport.collector() : collector;
+		return EntityExport.capturing() ? EntityExport.collector() : collector;
 	}
 
 	@Inject(method = SUBMIT, at = @At("TAIL"))
 	private void forestcraft$end(LivingEntityRenderState state, PoseStack pose, SubmitNodeCollector collector, CameraRenderState camera, CallbackInfo ci) {
-		if (ForestLink.forestInGame()) EntityExport.end();
+		if (EntityExport.capturing()) EntityExport.end();
 	}
 }

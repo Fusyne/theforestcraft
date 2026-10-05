@@ -225,6 +225,8 @@ namespace ForestCraft
         static readonly List<Vector3> verts = new List<Vector3>();
         static readonly List<Vector3> normals = new List<Vector3>();
         static readonly List<Vector2> uvs = new List<Vector2>();
+        static readonly Dictionary<long, List<int>> groups = new Dictionary<long, List<int>>();
+        static readonly List<int> slotHash = new List<int>();
         static byte[] buffer;
         static int lastSeq, shown;
         static GameObject root;
@@ -252,6 +254,40 @@ namespace ForestCraft
             shown = count;
             Hide(count);
             Place(view, thirdPerson, localFeet);
+        }
+
+        /// <summary>
+        /// A copy of the small entity Minecraft shows nearest to this point (an arrow that just
+        /// hit something), as it looks right now: same mesh, same materials. Null if none.
+        /// </summary>
+        public static GameObject CopyNear(Vector3 mcPos, float within)
+        {
+            if (buffer == null) return null;
+            float best = within * within;
+            int found = -1;
+            for (int e = 0; e < shown && e < slots.Count; e++)
+            {
+                int at = 16 + e * 32;
+                if ((BitConverter.ToInt32(buffer, at) & 1) != 0) continue; // Steve
+                int count = BitConverter.ToInt32(buffer, at + 20);
+                if (count <= 0 || count > 40) continue; // an arrow is a handful of quads
+                float dx = BitConverter.ToSingle(buffer, at + 4) - mcPos.x;
+                float dy = BitConverter.ToSingle(buffer, at + 8) - mcPos.y;
+                float dz = BitConverter.ToSingle(buffer, at + 12) - mcPos.z;
+                float d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 < best) { best = d2; found = e; }
+            }
+            if (found < 0) return null;
+            GameObject src = slots[found];
+            Mesh mesh = src.GetComponent<MeshFilter>().sharedMesh;
+            if (mesh == null || mesh.vertexCount == 0) return null;
+            var copy = new GameObject("ForestCraft planted arrow");
+            copy.AddComponent<MeshFilter>().sharedMesh = UnityEngine.Object.Instantiate(mesh);
+            var r = copy.AddComponent<MeshRenderer>();
+            r.sharedMaterials = src.GetComponent<MeshRenderer>().sharedMaterials;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            copy.transform.localScale = Vector3.one * Link.Scale;
+            return copy;
         }
 
         static void Place(IntPtr view, bool thirdPerson, Vector3 localFeet)
@@ -293,8 +329,15 @@ namespace ForestCraft
             int at = 16 + e * 32;
             int first = BitConverter.ToInt32(buffer, at + 16);
             int count = BitConverter.ToInt32(buffer, at + 20);
+            // Same quads as last time (an entity standing still, a block entity): keep the mesh.
+            int hash = count * 31 + first;
+            int end = QuadsAt + (first + count) * Quad;
+            for (int o = QuadsAt + first * Quad; o + 4 <= end; o += 4) hash = hash * 31 + BitConverter.ToInt32(buffer, o);
+            while (slotHash.Count <= e) slotHash.Add(0);
+            if (slotHash[e] == hash && hash != 0) return;
+            slotHash[e] = hash;
             verts.Clear(); normals.Clear(); uvs.Clear();
-            var groups = new Dictionary<long, List<int>>();
+            foreach (var list in groups.Values) list.Clear();
             for (int q = first; q < first + count; q++)
             {
                 int o = QuadsAt + q * Quad;
@@ -305,17 +348,27 @@ namespace ForestCraft
                 List<int> tris;
                 if (!groups.TryGetValue(key, out tris)) { tris = new List<int>(); groups[key] = tris; }
                 int b = verts.Count;
-                for (int i = 0; i < 4; i++)
-                {
-                    int v = o + i * 20;
-                    verts.Add(new Vector3(BitConverter.ToSingle(buffer, v), BitConverter.ToSingle(buffer, v + 4), -BitConverter.ToSingle(buffer, v + 8)));
-                    normals.Add(n);
-                    uvs.Add(new Vector2(BitConverter.ToSingle(buffer, v + 12), 1f - BitConverter.ToSingle(buffer, v + 16)));
-                }
-                // Both windings: Minecraft draws entities without back-face culling (arrow fins,
-                // flat items, capes are single planes), a closed box just hides its inner side.
-                tris.Add(b); tris.Add(b + 1); tris.Add(b + 2); tris.Add(b); tris.Add(b + 2); tris.Add(b + 3);
-                tris.Add(b); tris.Add(b + 2); tris.Add(b + 1); tris.Add(b); tris.Add(b + 3); tris.Add(b + 2);
+                // Both sides: Minecraft draws entities without back-face culling (arrow fins,
+                // flat items, capes are single planes). The back side gets its own vertices with the
+                // normal turned round: sharing the front's normal lit it as if it faced the other
+                // way, and a thin turning plane (an arrow's fins) flashed light and dark.
+                for (int side = 0; side < 2; side++)
+                    for (int i = 0; i < 4; i++)
+                    {
+                        int v = o + i * 20;
+                        verts.Add(new Vector3(BitConverter.ToSingle(buffer, v), BitConverter.ToSingle(buffer, v + 4), -BitConverter.ToSingle(buffer, v + 8)));
+                        normals.Add(side == 0 ? n : -n);
+                        uvs.Add(new Vector2(BitConverter.ToSingle(buffer, v + 12), 1f - BitConverter.ToSingle(buffer, v + 16)));
+                    }
+                // Each side wound so Unity sees it as facing the way its normal points (front faces:
+                // Cross(v1 - v0, v2 - v0) along the normal). The flip of z between Minecraft and
+                // Unity reverses Minecraft's winding: guessing it the other way showed every mob
+                // from its inside-facing side (black in some qualities, striped shadows in others).
+                Vector3 c = Vector3.Cross(verts[b + 1] - verts[b], verts[b + 2] - verts[b]);
+                bool along = Vector3.Dot(c, n) >= 0f;
+                int f = along ? b : b + 4, r = along ? b + 4 : b;
+                tris.Add(f); tris.Add(f + 1); tris.Add(f + 2); tris.Add(f); tris.Add(f + 2); tris.Add(f + 3);
+                tris.Add(r); tris.Add(r + 2); tris.Add(r + 1); tris.Add(r); tris.Add(r + 3); tris.Add(r + 2);
             }
             GameObject slot = slots[e];
             Mesh m = slot.GetComponent<MeshFilter>().sharedMesh;
@@ -323,20 +376,29 @@ namespace ForestCraft
             m.SetVertices(verts);
             m.SetNormals(normals);
             m.SetUVs(0, uvs);
-            m.subMeshCount = groups.Count;
-            var mats = new Material[groups.Count];
+            int used = 0;
+            foreach (var pair in groups) if (pair.Value.Count > 0) used++;
+            m.subMeshCount = used;
+            var mats = new Material[used];
             int sub = 0;
             foreach (var pair in groups)
             {
+                if (pair.Value.Count == 0) continue;
                 m.SetTriangles(pair.Value, sub);
                 mats[sub] = MaterialFor(pair.Key);
                 sub++;
             }
             m.RecalculateBounds();
-            slot.GetComponent<MeshRenderer>().sharedMaterials = mats;
+            var renderer = slot.GetComponent<MeshRenderer>();
+            renderer.sharedMaterials = mats;
+            // Small things (an arrow, a dropped item) cast no shadow: on thin parts the shadow
+            // flickered on the thing itself.
+            Vector3 size = m.bounds.size;
+            renderer.shadowCastingMode = Mathf.Max(size.x, Mathf.Max(size.y, size.z)) < 0.7f
+                ? UnityEngine.Rendering.ShadowCastingMode.Off : UnityEngine.Rendering.ShadowCastingMode.On;
         }
 
-        static Material MaterialFor(long key)
+        internal static Material MaterialFor(long key)
         {
             int material = (int)(key >> 32);
             uint color = (uint)(key & 0xFFFFFFFF);
@@ -357,6 +419,14 @@ namespace ForestCraft
             m.color = color == 0xFFFFFFFF ? Color.white : new Color(((color >> 16) & 255) / 255f, ((color >> 8) & 255) / 255f, (color & 255) / 255f, 1f);
             materials[key] = m;
             return m;
+        }
+
+        // Texture N (tex_N.bin), or the block (-1) / item (-2) atlas.
+        public static Texture2D Texture(int id)
+        {
+            if (id == -1 || id == -2) return Blocks.Atlas(id == -2 ? 1 : 0);
+            Texture2D t;
+            return textures.TryGetValue(id, out t) ? t : null;
         }
 
         // Minecraft exports each entity texture once as tex_N.bin; OFF_MC+164 = how many exist.

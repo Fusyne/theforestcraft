@@ -14,10 +14,14 @@ if ($answer -notmatch '^[oOyY]') { Write-Host '  Annule.'; exit 0 }
 
 $inst = Find-ForestCraftInstance
 if ($inst) {
-    $world = Join-Path (Get-InstanceGameDir $inst) 'saves\ForestCraft'
-    if (Test-Path $world) {
-        try { Remove-Item $world -Recurse -Force } catch { Fail 'impossible d''effacer le monde : Minecraft est sans doute encore ouvert.' }
-        Ok 'monde Minecraft efface'
+    # Every ForestCraft world: the one being played and the one kept with each save slot.
+    $savesDir = Join-Path (Get-InstanceGameDir $inst) 'saves'
+    $worlds = @(Get-ChildItem $savesDir -Directory -Filter 'ForestCraft*' -ErrorAction SilentlyContinue)
+    if ($worlds.Count -gt 0) {
+        foreach ($w in $worlds) {
+            try { Remove-Item $w.FullName -Recurse -Force } catch { Fail 'impossible d''effacer les mondes : Minecraft est sans doute encore ouvert.' }
+        }
+        Ok "$($worlds.Count) monde(s) Minecraft efface(s)"
     } else { Ok 'pas de monde Minecraft a effacer' }
 } else { Info 'Prism introuvable : monde Minecraft non touche' }
 

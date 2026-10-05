@@ -169,3 +169,30 @@ function Find-Jdk25($repo) {
     if ((Get-JavaMajor $tools) -lt 25) { Fail "le JDK telecharge ne fonctionne pas" }
     return $tools
 }
+
+# ---------------------------------------------------------------- extra Minecraft mods (Modrinth)
+# Optional helpers that don't change the game: installed when Modrinth has a build for this
+# Minecraft version, skipped quietly otherwise.
+function Install-ModrinthMod($slug, $prefix, $modsDir) {
+    try {
+        $gv = [uri]::EscapeDataString('["' + $FC.McVersion + '"]')
+        $ld = [uri]::EscapeDataString('["fabric"]')
+        $url = "https://api.modrinth.com/v2/project/$slug/version?game_versions=$gv&loaders=$ld"
+        $versions = @(Invoke-RestMethod -Uri $url -UseBasicParsing -Headers @{ 'User-Agent' = 'ForestCraft-installer' })
+        if ($versions.Count -eq 0) { Info "$slug : pas encore de version pour Minecraft $($FC.McVersion), ignore"; return }
+        $v = $versions | Where-Object { $_.version_type -eq 'release' } | Select-Object -First 1
+        if (-not $v) { $v = $versions[0] }
+        # Only stand-alone mods: one needing another (Fabric API...) could stop Minecraft from starting.
+        $needs = @($v.dependencies | Where-Object { $_.dependency_type -eq 'required' })
+        if ($needs.Count -gt 0) { Info "$slug : demande d'autres mods, ignore"; return }
+        $file = $v.files | Where-Object { $_.primary } | Select-Object -First 1
+        if (-not $file) { $file = $v.files | Select-Object -First 1 }
+        $target = Join-Path $modsDir $file.filename
+        if (Test-Path $target) { Ok "$slug $($v.version_number) deja present"; return }
+        Get-ChildItem $modsDir -Filter "$prefix*.jar" -ErrorAction SilentlyContinue | Remove-Item -Force
+        Save-Download $file.url $target
+        Ok "$slug $($v.version_number) installe"
+    } catch {
+        Info "$slug non installe ($($_.Exception.Message)) : ForestCraft marche sans."
+    }
+}

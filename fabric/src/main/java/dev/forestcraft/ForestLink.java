@@ -124,7 +124,14 @@ public final class ForestLink {
 			return;
 		}
 		// Arrived. Never pull the body back: that fight is the rollback.
-		if (settledSeq == forest.teleportSeq()) return;
+		if (settledSeq == forest.teleportSeq()) {
+			// Inside something for half a second (a cave floor met at an angle, the plane's hull
+			// arriving after the body): climb out instead of staying stuck.
+			if (!player.isSpectator() && !player.level().noCollision(player, player.getBoundingBox().deflate(1.0e-3))) {
+				if (++stuckTicks >= 10) { stuckTicks = 0; unstuck(player); }
+			} else stuckTicks = 0;
+			return;
+		}
 		double dx = player.getX() - forest.x();
 		double dy = player.getY() - forest.y();
 		double dz = player.getZ() - forest.z();
@@ -195,9 +202,13 @@ public final class ForestLink {
 	// floor, rocks...) are not known yet. Keep the player still until The Forest says the blocks
 	// around it are scanned (Forest block +132), so it can't fall through a floor that isn't there yet.
 	private static Vec3 holdAt;
+	private static int stuckTicks;
 	private static int holdTicks, readyTicks;
 
 	public static void hold(net.minecraft.server.level.ServerPlayer player) {
+		// Tell The Forest the body was moved on purpose (respawn): its puppet jumps there too
+		// instead of seeing a body "fallen through the ground" and taking it back.
+		if (map != null) map.putInt(Proto.OFF_MC + 188, map.getInt(Proto.OFF_MC + 188) + 1);
 		holdAt = player.position();
 		holdTicks = 0;
 		readyTicks = 0;
@@ -208,10 +219,18 @@ public final class ForestLink {
 	private static void holdTick(net.minecraft.server.level.ServerPlayer player) {
 		if (holdAt == null || map == null) return;
 		holdTicks++;
-		boolean ready = map.getInt(Proto.OFF_FOREST + 132) == 1;
+		refreshGrid();
+		// Ready means: The Forest has scanned its colliders (the plane's hull, rocks...) around
+		// THIS spot. Right after a respawn its flag still describes where the player died.
+		boolean here = solids.length > 0
+			&& Math.abs(holdAt.x - (solidX + solidSX / 2.0)) < 3.0
+			&& Math.abs(holdAt.z - (solidZ + solidSZ / 2.0)) < 3.0
+			&& holdAt.y >= solidY && holdAt.y < solidY + solidSY;
+		boolean ready = here && map.getInt(Proto.OFF_FOREST + 132) == 1;
 		readyTicks = ready && holdTicks > 4 ? readyTicks + 1 : 0;
-		if (readyTicks >= 3 || holdTicks > 200) {
+		if (readyTicks >= 3 || holdTicks > 300) {
 			holdAt = null;
+			unstuck(player);
 			return;
 		}
 		if (player.position().distanceToSqr(holdAt) > 1.0e-4) player.teleportTo(holdAt.x, holdAt.y, holdAt.z);
@@ -219,9 +238,61 @@ public final class ForestLink {
 		player.resetFallDistance();
 	}
 
+	/** Inside the plane's hull or a rock once its collisions arrive: climb out, at most 4 blocks. */
+	public static void unstuck(net.minecraft.server.level.ServerPlayer player) {
+		var level = player.level();
+		var box = player.getBoundingBox().deflate(1.0e-3);
+		if (level.noCollision(player, box)) return;
+		for (int i = 1; i <= 32; i++) {
+			double up = i * 0.125;
+			if (level.noCollision(player, box.move(0, up, 0))) {
+				player.teleportTo(player.getX(), player.getY() + up, player.getZ());
+				player.setDeltaMovement(Vec3.ZERO);
+				player.resetFallDistance();
+				LOG.info("respawn spot was inside something: moved up {} blocks", up);
+				return;
+			}
+		}
+	}
+
+	/** A new world is about to open: nothing of the previous one carries over. */
+	public static void resetWorldState() {
+		respawnPos = null;
+		lastPlayer = null;
+		holdAt = null;
+		settledSeq = -1;
+		appliedTeleport = -1;
+		clientAppliedTeleport = -1;
+	}
+
 	public static void heartbeat() {
 		if (map == null) return;
 		map.putLong(Proto.OFF_HEADER + 24, System.currentTimeMillis() & 0x7fffffffffffffffL);
+	}
+
+	/** The Forest is in a game (menus included): Minecraft draws one frame per Forest frame. */
+	public static boolean forestPlaying() {
+		if (map == null) return false;
+		return (map.getInt(Proto.OFF_FOREST + 4) & Proto.IN_GAME) != 0;
+	}
+
+	private static int pacedSeq;
+
+	/**
+	 * Wait (at most 50 ms) until The Forest starts a new frame (its block at OFF_FOREST is
+	 * rewritten once per frame), so Minecraft renders exactly one frame per Forest frame: the
+	 * hand moves at The Forest's pace, without frames skipped or shown twice, and no GPU time
+	 * is spent on frames nobody sees.
+	 */
+	public static void paceToForest() {
+		if (!forestPlaying()) return;
+		long deadline = System.nanoTime() + 50_000_000L;
+		int seq = map.getInt(Proto.OFF_FOREST) & ~1;
+		while (seq == pacedSeq && System.nanoTime() < deadline) {
+			java.util.concurrent.locks.LockSupport.parkNanos(200_000L);
+			seq = map.getInt(Proto.OFF_FOREST) & ~1;
+		}
+		pacedSeq = seq;
 	}
 
 	public static boolean forestInGame() {
@@ -351,10 +422,46 @@ public final class ForestLink {
 		mouseAck = seq;
 	}
 
+	// ---- size: Forest units per block, fixed per Minecraft world (OFF_MC+196) -----------------
+
+	private static volatile float worldScale = 1.5f;
+
+	/** The size this world was made with (The Forest reads it at OFF_MC+196). */
+	public static void setWorldScale(float k) {
+		worldScale = k;
+		if (map != null) map.putFloat(Proto.OFF_MC + 196, k);
+	}
+
+	/** The size The Forest would like for a new world (config or auto, OFF_FOREST+232). */
+	public static float wantedScale() {
+		float w = map == null ? 0f : map.getFloat(Proto.OFF_FOREST + 232);
+		return w >= 0.5f && w <= 3f ? w : 1.8f;
+	}
+
+	/**
+	 * Steve's hitbox is narrower when blocks are bigger than 1.5 Forest units, so in The Forest
+	 * he stays as wide as at 1.5 (0.9 units): doors, the plane's cabin, cave passages still fit.
+	 */
+	public static float hitboxWidthFactor() {
+		float k = worldScale;
+		return k > 1.5f ? Math.max(0.6f, 1.5f / k) : 1f;
+	}
+
+	/** Bit 1: in the caves, bit 2: in a cave entrance (The Forest, OFF_FOREST+212). */
+	private static volatile int caveFlags;
+
+	/** Under the island (caves) or in an entrance hole: the heightmap ground isn't the floor. */
+	public static boolean underground() {
+		return caveFlags != 0;
+	}
+
 	public static void refreshGrid() {
 		if (map == null) return;
+		caveFlags = map.getInt(Proto.OFF_FOREST + 212);
 		refreshSolids();
 		refreshGround();
+		refreshWater();
+		refreshFar();
 		int seq = map.getInt(Proto.OFF_GRID);
 		if ((seq & 1) != 0 || seq == 0 || seq == gridSeq) return;
 		int ox = map.getInt(Proto.OFF_GRID + 4);
@@ -456,7 +563,7 @@ public final class ForestLink {
 	private static final java.util.concurrent.ConcurrentHashMap<Long, net.minecraft.world.phys.shapes.VoxelShape> GROUND_SHAPES = new java.util.concurrent.ConcurrentHashMap<>();
 
 	private static net.minecraft.world.phys.shapes.VoxelShape groundShape(int x, int y, int z) {
-		if (TerrainDig.isConverted(x, y, z)) return null;
+		if (caveFlags != 0 || TerrainDig.isConverted(x, y, z)) return null;
 		double hc = heightAt(x, z);
 		if (Double.isNaN(hc)) return null;
 		double min = minHeight(x, z), max = maxHeight(x, z);
@@ -490,6 +597,14 @@ public final class ForestLink {
 		});
 	}
 
+	/** A cell of the island's ground only partly under the surface (not dug, not revealed). */
+	public static boolean isPartialGround(int x, int y, int z) {
+		if (caveFlags != 0 || TerrainDig.isConverted(x, y, z)) return false;
+		double hc = heightAt(x, z), min = minHeight(x, z), max = maxHeight(x, z);
+		if (Double.isNaN(hc) || Double.isNaN(min) || Double.isNaN(max)) return false;
+		return y < max - 1.0e-3 && y + 1 > min - 0.02 && y >= Math.floor(hc) - 8;
+	}
+
 	/** Y of the island's top block in this column (its top face is the rounded surface), or MIN_VALUE. */
 	public static int groundTop(int x, int z) {
 		double h = heightAt(x, z);
@@ -505,20 +620,109 @@ public final class ForestLink {
 		return Float.isNaN(h) ? Double.NaN : h;
 	}
 
-	/** Top of the Forest surface inside this block, or NaN (none, or the cell was dug/revealed). */
+	/**
+	 * Top of the Forest surface inside this block, or NaN (none, or the cell was dug/revealed).
+	 * Around the player from the detailed grid; further out (animals and monsters) from the
+	 * coarse far grid. In the caves only the island's ground around the player is ignored:
+	 * a cow up on the surface keeps standing on it.
+	 */
 	public static double surfaceIn(int x, int y, int z) {
 		int lx = x - originX;
 		int lz = z - originZ;
-		if (lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID || gridSeq == 0) return Double.NaN;
-		float h = heights[lz * Proto.GRID + lx];
+		boolean fine = gridSeq != 0 && lx >= 0 && lz >= 0 && lx < Proto.GRID && lz < Proto.GRID;
+		float h;
+		if (fine) h = heights[lz * Proto.GRID + lx];
+		else {
+			double f = farHeight(x, z);
+			if (Double.isNaN(f)) return Double.NaN;
+			h = (float) f;
+		}
 		if (Float.isNaN(h)) return Double.NaN;
 		int block = (int) Math.floor(h - 1e-4);
 		if (y > block || y < block - 8) return Double.NaN;
+		if (caveFlags != 0 && fine && Math.abs(lx - Proto.GRID / 2) <= CAVE_REACH && Math.abs(lz - Proto.GRID / 2) <= CAVE_REACH) return Double.NaN;
 		if (TerrainDig.isConverted(x, y, z)) return Double.NaN;
 		if (y < block) return 1.0;
 		double top = h - block;
 		if (top < 1.0e-3) return 1.0;
 		return Math.min(1.0, top);
+	}
+
+	/** In the caves, the island's ground is ignored this far (blocks) around the player. */
+	private static final int CAVE_REACH = 10;
+
+	// ---- the island's surface far around the player, for mobs (The Forest, OFF_FAR) -----------
+
+	private static final int OFF_FAR = 0x9F0000;
+	private static final int FAR = 128;
+	private static float[] far = new float[0];
+	private static int farX, farZ, farSeq;
+
+	private static void refreshFar() {
+		int seq = map.getInt(OFF_FAR);
+		if ((seq & 1) != 0 || seq == 0 || seq == farSeq) return;
+		if (map.getInt(OFF_FAR + 12) != FAR) return;
+		int ox = map.getInt(OFF_FAR + 4), oz = map.getInt(OFF_FAR + 8);
+		float[] next = new float[FAR * FAR];
+		int at = OFF_FAR + 16;
+		for (int i = 0; i < next.length; i++) { next[i] = map.getFloat(at); at += 4; }
+		if (map.getInt(OFF_FAR) != seq) return;
+		far = next;
+		farX = ox; farZ = oz;
+		farSeq = seq;
+	}
+
+	/** The island's original surface at the centre of this column from the far grid, or NaN. */
+	public static double farHeight(int x, int z) {
+		float[] f = far;
+		int lx = x - farX, lz = z - farZ;
+		if (f.length == 0 || lx < 0 || lz < 0 || lx >= FAR || lz >= FAR) return Double.NaN;
+		float h = f[lz * FAR + lx];
+		return Float.isNaN(h) ? Double.NaN : h;
+	}
+
+	/**
+	 * What The Forest has in this air block, as a Minecraft block for its sounds and particles
+	 * (footsteps, landing, sprint dust): grass on top of the island, sand on beaches, dirt under,
+	 * stone deep down and for rocks and caves. Null when there is nothing of The Forest there.
+	 */
+	public static net.minecraft.world.level.block.state.BlockState groundState(int x, int y, int z) {
+		if (map == null) return null;
+		double top = surfaceIn(x, y, z);
+		if (!Double.isNaN(top)) {
+			var b = TerrainDig.groundBlock(x, y, z);
+			if (b.is(net.minecraft.world.level.block.Blocks.DIRT)) {
+				double h = heightAt(x, z);
+				if (Double.isNaN(h)) h = farHeight(x, z);
+				if (!Double.isNaN(h) && y == (int) Math.floor(h - 1e-4)) return net.minecraft.world.level.block.Blocks.GRASS_BLOCK.defaultBlockState();
+			}
+			return b;
+		}
+		if (solidShape(x, y, z) != null) return net.minecraft.world.level.block.Blocks.STONE.defaultBlockState();
+		return null;
+	}
+
+	/** Y of the island's top ground cell in this column (near or far grid), or MIN_VALUE. */
+	public static int groundTopAny(int x, int z) {
+		double h = heightAt(x, z);
+		if (Double.isNaN(h)) h = farHeight(x, z);
+		return Double.isNaN(h) ? Integer.MIN_VALUE : (int) Math.floor(h - 1e-4);
+	}
+
+	/** Minecraft knows the island's ground in this column (near or far grid). */
+	public static boolean knownGround(int x, int z) {
+		return !Double.isNaN(heightAt(x, z)) || !Double.isNaN(farHeight(x, z));
+	}
+
+	/** Highest point of The Forest (ground or tree/rock/plane) inside this block, 0..1, or NaN. */
+	public static double forestTop(int x, int y, int z) {
+		double top = surfaceIn(x, y, z);
+		net.minecraft.world.phys.shapes.VoxelShape solid = solidShape(x, y, z);
+		if (solid != null && !solid.isEmpty()) {
+			double s = solid.max(net.minecraft.core.Direction.Axis.Y);
+			top = Double.isNaN(top) ? s : Math.max(top, s);
+		}
+		return top;
 	}
 
 	// ---- the original surface in detail (The Forest, OFF_GROUND) --------------------------------
@@ -527,6 +731,7 @@ public final class ForestLink {
 	private static float[] corners = new float[(Proto.GRID + 1) * (Proto.GRID + 1)];
 	private static float[] mins = new float[Proto.GRID * Proto.GRID];
 	private static float[] maxs = new float[Proto.GRID * Proto.GRID];
+	private static byte[] kinds = new byte[Proto.GRID * Proto.GRID];
 	private static int groundX, groundZ, groundSeq;
 
 	private static void refreshGround() {
@@ -540,10 +745,19 @@ public final class ForestLink {
 		for (int i = 0; i < c.length; i++) { c[i] = map.getFloat(at); at += 4; }
 		for (int i = 0; i < lo.length; i++) { lo[i] = map.getFloat(at); at += 4; }
 		for (int i = 0; i < hi.length; i++) { hi[i] = map.getFloat(at); at += 4; }
+		byte[] k = new byte[Proto.GRID * Proto.GRID];
+		map.get(OFF_GROUND + 0x3200, k);
 		if (map.getInt(OFF_GROUND) != seq) return;
-		corners = c; mins = lo; maxs = hi;
+		corners = c; mins = lo; maxs = hi; kinds = k;
 		groundX = ox; groundZ = oz;
 		groundSeq = seq;
+	}
+
+	/** The island is sand in this column (beaches), as The Forest paints it. */
+	public static boolean sandAt(int x, int z) {
+		int lx = x - groundX, lz = z - groundZ;
+		if (groundSeq == 0 || lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID) return false;
+		return kinds[lz * Proto.GRID + lx] == 1;
 	}
 
 	/** Lowest point of the original surface over this column, or NaN. */
@@ -572,5 +786,91 @@ public final class ForestLink {
 		double h00 = c[lz * n + lx], h10 = c[lz * n + lx + 1], h01 = c[(lz + 1) * n + lx], h11 = c[(lz + 1) * n + lx + 1];
 		double fx = x - bx, fz = z - bz;
 		return (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
+	}
+
+	// ---- The Forest's water (lakes, sea) around the player (OFF_WATER) ----------------------
+
+	private static final int OFF_WATER = 0xA34400;
+	private static float[] waterTop = new float[0], waterBottom = new float[0];
+	private static int waterX, waterZ, waterSeq;
+
+	private static void refreshWater() {
+		int seq = map.getInt(OFF_WATER);
+		if ((seq & 1) != 0 || seq == 0 || seq == waterSeq) return;
+		int ox = map.getInt(OFF_WATER + 4), oz = map.getInt(OFF_WATER + 8);
+		if (map.getInt(OFF_WATER + 12) != Proto.GRID) return;
+		int n = Proto.GRID * Proto.GRID;
+		float[] top = new float[n], bottom = new float[n];
+		int at = OFF_WATER + 16;
+		for (int i = 0; i < n; i++) { top[i] = map.getFloat(at); at += 4; }
+		for (int i = 0; i < n; i++) { bottom[i] = map.getFloat(at); at += 4; }
+		if (map.getInt(OFF_WATER) != seq) return;
+		boolean any = false;
+		for (float t : top) if (!Float.isNaN(t)) { any = true; break; }
+		waterTop = any ? top : new float[0];
+		waterBottom = bottom;
+		waterX = ox; waterZ = oz;
+		waterSeq = seq;
+	}
+
+	/** How full of The Forest's water this block is (1 under the surface, less in the top one). */
+	public static float waterFill(int x, int y, int z) {
+		float[] top = waterTop;
+		int lx = x - waterX, lz = z - waterZ;
+		if (top.length == 0 || lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID) return 1f;
+		float surface = top[lz * Proto.GRID + lx];
+		return Float.isNaN(surface) ? 1f : Math.max(0f, Math.min(1f, surface - y));
+	}
+
+	public static boolean anyWaterIn(int x0, int y0, int z0, int x1, int y1, int z1) {
+		if (waterTop.length == 0) return false;
+		for (int x = x0; x <= x1; x++)
+			for (int z = z0; z <= z1; z++)
+				for (int y = y0; y <= y1; y++)
+					if (waterAt(x, y, z)) return true;
+		return false;
+	}
+
+	/**
+	 * Water of The Forest in this block: under the surface (a block at least half under it),
+	 * above the volume's bottom, and not inside the island's ground.
+	 */
+	public static boolean waterAt(int x, int y, int z) {
+		float[] top = waterTop;
+		if (top.length == 0) return false;
+		int lx = x - waterX, lz = z - waterZ;
+		if (lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID) return false;
+		int i = lz * Proto.GRID + lx;
+		float surface = top[i];
+		if (Float.isNaN(surface) || y + 0.12 > surface) return false;
+		// The Forest's water volumes are often shallow boxes under the surface: outside the caves
+		// the water goes all the way down to the lake bed, or a swimmer sank out of it.
+		if (caveFlags != 0 && y + 1 <= waterBottom[i]) return false;
+		if (caveFlags == 0) {
+			double hc = heightAt(x, z);
+			if (!Double.isNaN(hc)) {
+				if (hc >= surface) return false; // dry land (the sea's volume spans the island)
+				if (y + 1 <= hc && !TerrainDig.isConverted(x, y, z)) return false; // the lake bed
+			}
+		}
+		return true;
+	}
+
+	// ---- ropes and climbable walls of The Forest (OFF_ROPES): ladders for Minecraft ----------
+
+	private static final int OFF_ROPES = 0xA36500;
+
+	/** Within reach of one of The Forest's ropes: climbs like a ladder. */
+	public static boolean ropeAt(double x, double y, double z) {
+		if (map == null) return false;
+		int n = map.getInt(OFF_ROPES);
+		if (n <= 0 || n > 64) return false;
+		for (int i = 0; i < n; i++) {
+			int at = OFF_ROPES + 16 + i * 16;
+			double dx = map.getFloat(at) - x, dz = map.getFloat(at + 4) - z;
+			if (dx * dx + dz * dz > 1.0) continue;
+			if (y >= map.getFloat(at + 8) && y <= map.getFloat(at + 12)) return true;
+		}
+		return false;
 	}
 }

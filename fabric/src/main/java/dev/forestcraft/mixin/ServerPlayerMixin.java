@@ -19,6 +19,7 @@ public abstract class ServerPlayerMixin {
 		ForestLink.rescue(player);
 		ForestLink.syncWorld(player);
 		dev.forestcraft.TerrainDig.serverTick(player.level());
+		dev.forestcraft.Shots.collectHits(player.level());
 	}
 
 	@Inject(method = "hurtServer", at = @At("HEAD"), cancellable = true)

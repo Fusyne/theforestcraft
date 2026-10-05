@@ -29,6 +29,14 @@ namespace ForestCraft
         static bool shadersLogged;
         static byte[] buffer;
 
+        // A new game: every block section of the previous one goes (Minecraft sends them again).
+        public static void ClearAll()
+        {
+            foreach (var go in sections.Values) if (go != null) UnityEngine.Object.Destroy(go);
+            sections.Clear();
+            lights.Clear();
+        }
+
         public static void Reset(IntPtr view)
         {
             Marshal.WriteInt32(view, OffMesh, 0);
@@ -41,6 +49,7 @@ namespace ForestCraft
             LoadAtlas(view, 0, 92, "atlas.bin");
             LoadAtlas(view, 1, 148, "atlas_items.bin");
             Cracks.Load(view);
+            PickLights();
             int msg = Marshal.ReadInt32(view, OffMesh);
             int ack = Marshal.ReadInt32(view, OffMesh + 4);
             if (msg == ack) return;
@@ -55,6 +64,17 @@ namespace ForestCraft
             Marshal.WriteInt32(view, OffMesh + 4, msg);
         }
 
+        // How many times each section was received: the dug ground waits for the blocks it reveals.
+        static readonly Dictionary<long, int> stamps = new Dictionary<long, int>();
+
+        public static int Stamp(int sx, int sy, int sz)
+        {
+            long key = ((long)(sx & 0x3FFFFF) << 42) | ((long)(sy & 0xFFFFF) << 22) | (long)(sz & 0x3FFFFF);
+            int st;
+            stamps.TryGetValue(key, out st);
+            return st;
+        }
+
         static void Receive(IntPtr view)
         {
             int sx = Marshal.ReadInt32(view, OffMesh + 8);
@@ -63,6 +83,7 @@ namespace ForestCraft
             int count = Marshal.ReadInt32(view, OffMesh + 20);
             bool item = Marshal.ReadInt32(view, OffMesh + 24) == 1;
             long key = ((long)(sx & 0x3FFFFF) << 42) | ((long)(sy & 0xFFFFF) << 22) | (long)(sz & 0x3FFFFF);
+            if (!item) { int st; stamps.TryGetValue(key, out st); stamps[key] = st + 1; }
             GameObject old;
             if (!item && sections.TryGetValue(key, out old))
             {
@@ -159,6 +180,7 @@ namespace ForestCraft
             renderer.receiveShadows = true;
             sections[key] = go;
             AddLights(view, go, sentQuads, k);
+            AddColliders(view, go, sentQuads, k);
         }
 
         // Torches, lanterns, lava, glowstone... light The Forest's night: one point light per
@@ -177,11 +199,73 @@ namespace ForestCraft
                 lo.transform.localPosition = new Vector3(x * k, y * k, -z * k);
                 var light = lo.AddComponent<Light>();
                 light.type = LightType.Point;
-                light.range = Mathf.Max(2f, level) * k;
-                light.intensity = 0.6f + level / 15f * 1.4f;
+                light.range = Mathf.Max(2f, level * 0.75f) * k;
+                light.intensity = 0.3f + level / 15f * 0.6f;
                 light.color = new Color(1f, 0.78f, 0.5f);
                 light.shadows = LightShadows.None;
                 light.renderMode = LightRenderMode.Auto;
+                lights.Add(light);
+            }
+        }
+
+        // Minecraft's collision boxes for the section (merged walls, slabs, fences...) as real
+        // colliders on the layer of The Forest's cliffs: cannibals, animals, logs and dropped
+        // things stop at Minecraft's walls. (Solids skips them: Minecraft knows its own blocks.)
+        public const int ColliderLayer = 21;
+
+        static void AddColliders(IntPtr view, GameObject section, int quadCount, float k)
+        {
+            int lights = Marshal.ReadInt32(view, OffMesh + 28);
+            if (lights < 0 || lights > 256) return;
+            int at = OffMesh + Head + quadCount * Quad + 4 + lights * 16;
+            int n = Marshal.ReadInt32(view, at);
+            if (n <= 0 || n > 4096 || n != Marshal.ReadInt32(view, OffMesh + 32)) return;
+            var holder = new GameObject("collision");
+            holder.layer = ColliderLayer;
+            holder.transform.SetParent(section.transform, false);
+            at += 4;
+            for (int i = 0; i < n; i++)
+            {
+                float x0 = Link.ReadFloatAt(at), y0 = Link.ReadFloatAt(at + 4), z0 = Link.ReadFloatAt(at + 8);
+                float x1 = Link.ReadFloatAt(at + 12), y1 = Link.ReadFloatAt(at + 16), z1 = Link.ReadFloatAt(at + 20);
+                at += 24;
+                var box = holder.AddComponent<BoxCollider>();
+                box.center = new Vector3((x0 + x1) * 0.5f * k, (y0 + y1) * 0.5f * k, -(z0 + z1) * 0.5f * k);
+                box.size = new Vector3((x1 - x0) * k, (y1 - y0) * k, (z1 - z0) * k);
+            }
+        }
+
+        public static bool IsOurs(Transform t)
+        {
+            return root != null && t != null && t.IsChildOf(root.transform);
+        }
+
+        // Every torch is a point light; dozens of them (a lit base at night) cost a lot to draw.
+        // Only the nearest ones stay on, re-chosen twice a second.
+        const int MaxLights = 12;
+        static readonly List<Light> lights = new List<Light>();
+        static readonly List<KeyValuePair<float, Light>> byDistance = new List<KeyValuePair<float, Light>>();
+        static float nextLightPick;
+
+        public static void PickLights()
+        {
+            if (Time.realtimeSinceStartup < nextLightPick) return;
+            nextLightPick = Time.realtimeSinceStartup + 0.5f;
+            lights.RemoveAll(l => l == null);
+            if (lights.Count <= MaxLights)
+            {
+                for (int i = 0; i < lights.Count; i++) if (!lights[i].enabled) lights[i].enabled = true;
+                return;
+            }
+            Camera cam = LocalPlayerSafe.Camera();
+            Vector3 eye = cam != null ? cam.transform.position : Vector3.zero;
+            byDistance.Clear();
+            for (int i = 0; i < lights.Count; i++) byDistance.Add(new KeyValuePair<float, Light>((lights[i].transform.position - eye).sqrMagnitude, lights[i]));
+            byDistance.Sort((a, b) => a.Key.CompareTo(b.Key));
+            for (int i = 0; i < byDistance.Count; i++)
+            {
+                bool on = i < MaxLights;
+                if (byDistance[i].Value.enabled != on) byDistance[i].Value.enabled = on;
             }
         }
 
@@ -292,6 +376,11 @@ namespace ForestCraft
         {
             mats = null;
             return itemMeshes.TryGetValue(id, out mesh) && mesh != null && itemMaterials.TryGetValue(id, out mats);
+        }
+
+        public static Texture2D Atlas(int id)
+        {
+            return id >= 0 && id < atlases.Length ? atlases[id] : null;
         }
 
         public static Shader CutoutShader()

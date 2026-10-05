@@ -50,7 +50,7 @@ public final class BlockExport {
 	private static final int HEAD = 64;
 	private static final int QUAD = 100;
 	private static final int MAX_QUADS = (MESH_BYTES - HEAD) / QUAD;
-	private static final int RADIUS_XZ = 4;   // sections around the player (64 blocks)
+	private static final int RADIUS_XZ = 8;   // sections around the player (128 blocks)
 	private static final int RADIUS_Y = 2;
 
 	private static final Set<Long> dirty = new HashSet<>();
@@ -156,7 +156,9 @@ public final class BlockExport {
 	private static int contentHash(MappedByteBuffer map) {
 		int count = Math.max(0, Math.min(MAX_QUADS, map.getInt(OFF_MESH + 20)));
 		int lights = Math.max(0, Math.min(MAX_LIGHTS, map.getInt(OFF_MESH + 28)));
-		int end = OFF_MESH + HEAD + count * QUAD + 4 + lights * 16;
+		int boxesAt = OFF_MESH + HEAD + count * QUAD + 4 + lights * 16;
+		int boxes = Math.max(0, Math.min(MAX_BOXES, map.getInt(boxesAt)));
+		int end = boxesAt + 4 + boxes * 24;
 		int h = 1;
 		for (int at = OFF_MESH + 8; at + 4 <= end; at += 4) h = 31 * h + map.getInt(at);
 		return h;
@@ -187,6 +189,8 @@ public final class BlockExport {
 			// keep the plains colour
 		}
 		map.putInt(OFF_SPRITES + 52, color);
+		float[] sand = topRect(models, net.minecraft.world.level.block.Blocks.SAND.defaultBlockState());
+		if (sand != null) for (int i = 0; i < 4; i++) map.putFloat(OFF_SPRITES + 56 + i * 4, sand[i]);
 		map.putInt(OFF_SPRITES, 1);
 	}
 
@@ -211,6 +215,13 @@ public final class BlockExport {
 		return u0 == Float.MAX_VALUE ? null : new float[] {u0, v0, u1, v1};
 	}
 
+	/** Another world: every section is sent again. */
+	public static synchronized void resetSent() {
+		sent.clear();
+		sentHash.clear();
+		dirty.clear();
+	}
+
 	private static boolean sectionEmpty(ClientLevel level, int sx, int sy, int sz) {
 		if (sy < level.getMinSectionY() || sy > level.getMaxSectionY()) return true;
 		ChunkAccess chunk = level.getChunkSource().getChunk(sx, sz, ChunkStatus.FULL, false);
@@ -224,6 +235,7 @@ public final class BlockExport {
 		map.putInt(OFF_MESH + 12, sy);
 		map.putInt(OFF_MESH + 16, sz);
 		int count = 0;
+		lights = 0; // every section (an empty one too) starts without lights
 		if (!sectionEmpty(level, sx, sy, sz)) {
 			BlockStateModelSet models = minecraft.getModelManager().getBlockStateModelSet();
 			if (fluid == null) fluid = new net.minecraft.client.renderer.block.FluidRenderer(minecraft.getModelManager().getFluidStateModelSet());
@@ -284,7 +296,87 @@ public final class BlockExport {
 		map.putInt(lat, lights);
 		for (int i = 0; i < lights * 4; i++) map.putFloat(lat + 4 + i * 4, lightPos[i]);
 		map.putInt(OFF_MESH + 28, lights);
-		return count > 0 || lights > 0 ? Math.max(count, 1) : 0;
+		// Collision boxes after the lights: The Forest gives the blocks real colliders, so its
+		// cannibals, animals and loose objects stop at Minecraft's walls.
+		int boxes = writeBoxes(level, map, lat + 4 + lights * 16, sx, sy, sz);
+		map.putInt(OFF_MESH + 32, boxes);
+		return count > 0 || lights > 0 || boxes > 0 ? Math.max(count, 1) : 0;
+	}
+
+	private static final int MAX_BOXES = 4096;
+	private static final boolean[] full = new boolean[4096];
+	private static final boolean[] used = new boolean[4096];
+
+	/**
+	 * Section-relative collision boxes (x0, y0, z0, x1, y1, z1 floats), count first. Full cubes
+	 * are merged greedily into big boxes (a wall is a few boxes, not hundreds); slabs, stairs,
+	 * fences... go as their own boxes. Plants, torches and other walk-through blocks have none.
+	 */
+	private static int writeBoxes(ClientLevel level, MappedByteBuffer map, int at, int sx, int sy, int sz) {
+		java.util.Arrays.fill(full, false);
+		java.util.Arrays.fill(used, false);
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int n = 0;
+		int start = at + 4;
+		if (!sectionEmpty(level, sx, sy, sz)) {
+			for (int ly = 0; ly < 16; ly++) {
+				for (int lz = 0; lz < 16; lz++) {
+					for (int lx = 0; lx < 16; lx++) {
+						pos.set((sx << 4) + lx, (sy << 4) + ly, (sz << 4) + lz);
+						BlockState state = level.getBlockState(pos);
+						if (state.isAir()) continue;
+						VoxelShape shape = state.getCollisionShape(level, pos);
+						if (shape.isEmpty()) continue;
+						if (state.isCollisionShapeFullBlock(level, pos)) { full[(ly * 16 + lz) * 16 + lx] = true; continue; }
+						for (AABB b : shape.toAabbs()) {
+							if (n >= MAX_BOXES) break;
+							putBox(map, start + n * 24, lx + b.minX, ly + b.minY, lz + b.minZ, lx + b.maxX, ly + b.maxY, lz + b.maxZ);
+							n++;
+						}
+					}
+				}
+			}
+			// Greedy merge of full cubes: along x, then z, then y.
+			for (int y = 0; y < 16; y++) {
+				for (int z = 0; z < 16; z++) {
+					for (int x = 0; x < 16; x++) {
+						if (!full[(y * 16 + z) * 16 + x] || used[(y * 16 + z) * 16 + x] || n >= MAX_BOXES) continue;
+						int x1 = x;
+						while (x1 + 1 < 16 && full[(y * 16 + z) * 16 + x1 + 1] && !used[(y * 16 + z) * 16 + x1 + 1]) x1++;
+						int z1 = z;
+						grow:
+						while (z1 + 1 < 16) {
+							for (int i = x; i <= x1; i++) if (!full[(y * 16 + z1 + 1) * 16 + i] || used[(y * 16 + z1 + 1) * 16 + i]) break grow;
+							z1++;
+						}
+						int y1 = y;
+						growY:
+						while (y1 + 1 < 16) {
+							for (int k = z; k <= z1; k++)
+								for (int i = x; i <= x1; i++)
+									if (!full[((y1 + 1) * 16 + k) * 16 + i] || used[((y1 + 1) * 16 + k) * 16 + i]) break growY;
+							y1++;
+						}
+						for (int j = y; j <= y1; j++)
+							for (int k = z; k <= z1; k++)
+								for (int i = x; i <= x1; i++) used[(j * 16 + k) * 16 + i] = true;
+						putBox(map, start + n * 24, x, y, z, x1 + 1, y1 + 1, z1 + 1);
+						n++;
+					}
+				}
+			}
+		}
+		map.putInt(at, n);
+		return n;
+	}
+
+	private static void putBox(MappedByteBuffer map, int at, double x0, double y0, double z0, double x1, double y1, double z1) {
+		map.putFloat(at, (float) x0);
+		map.putFloat(at + 4, (float) y0);
+		map.putFloat(at + 8, (float) z0);
+		map.putFloat(at + 12, (float) x1);
+		map.putFloat(at + 16, (float) y1);
+		map.putFloat(at + 20, (float) z1);
 	}
 
 	private static final int MAX_LIGHTS = 256;

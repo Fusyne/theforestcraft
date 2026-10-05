@@ -29,9 +29,16 @@ public abstract class MinecraftMixin {
 	@Invoker("startUseItem")
 	protected abstract void forestcraft$startUseItem();
 
+	/** One Minecraft frame per Forest frame (ForestLink.paceToForest). */
+	@Inject(method = "runTick", at = @At("HEAD"))
+	private void forestcraft$pace(boolean advanceGameTime, CallbackInfo ci) {
+		ForestLink.paceToForest();
+	}
+
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void forestcraft$tick(CallbackInfo ci) {
 		Minecraft minecraft = (Minecraft) (Object) this;
+		dev.forestcraft.ForestEvents.poll(minecraft);
 		minecraft.options.pauseOnLostFocus = false;
 		// E is The Forest's interact key; Minecraft's inventory is I (also closes it from inside).
 		var inventoryKey = com.mojang.blaze3d.platform.InputConstants.Type.KEYSYM.getOrCreate(org.lwjgl.glfw.GLFW.GLFW_KEY_I);
@@ -80,13 +87,14 @@ public abstract class MinecraftMixin {
 		if (attack && !forestcraft$attack) forestcraft$startAttack();
 		forestcraft$forestAim(minecraft, attack);
 		forestcraft$combat(minecraft);
+		forestcraft$heldLight(minecraft);
 		dev.forestcraft.TerrainDig.collectLogs(minecraft);
 		dev.forestcraft.TerrainDig.collectGifts(minecraft);
 		forestcraft$attack = attack;
 		forestcraft$use = use;
 	}
 
-	private int forestcraft$frameW, forestcraft$frameH;
+	private int forestcraft$frameW, forestcraft$frameH, forestcraft$resizeTicks;
 	private int forestcraft$damageSeq = Integer.MIN_VALUE;
 	private float forestcraft$damageDone;
 
@@ -146,7 +154,80 @@ public abstract class MinecraftMixin {
 		if (aim == 2) dev.forestcraft.TerrainDig.request(minecraft, pos);
 	}
 
+	/** Light level of what Steve holds (torch 14, lantern 15...): The Forest lights around him. */
+	private void forestcraft$heldLight(Minecraft minecraft) {
+		var map = ForestLink.buffer();
+		if (map == null || minecraft.player == null) return;
+		int level = 0;
+		for (var stack : new net.minecraft.world.item.ItemStack[] { minecraft.player.getMainHandItem(), minecraft.player.getOffhandItem() }) {
+			if (stack.getItem() instanceof net.minecraft.world.item.BlockItem block)
+				level = Math.max(level, block.getBlock().defaultBlockState().getLightEmission());
+		}
+		map.putInt(Proto.OFF_MC + 192, level);
+	}
+
 	/** F5 mode, frame size and hotbar slot come from The Forest's window. */
+	/**
+	 * Minecraft only draws the hand, the HUD, screens and what The Forest copies (entities,
+	 * particles): it shares the GPU with The Forest, so it runs as light as it can. Nothing here
+	 * changes what is seen. Not touched: mipmaps (a resource reload would move the block atlas
+	 * The Forest already has).
+	 */
+	private static boolean forestcraft$lightened;
+
+	private void forestcraft$lightweight(Minecraft minecraft) {
+		if (forestcraft$lightened) return; // once per launch: a value the game clamps is not retried every tick
+		forestcraft$lightened = true;
+		var o = minecraft.options;
+		boolean changed = false;
+		changed |= forestcraft$set(o.renderDistance(), 10);          // blocks sent to The Forest: 128 around
+		changed |= forestcraft$set(o.simulationDistance(), 6);
+		changed |= forestcraft$set(o.framerateLimit(), 60);          // The Forest copies at most this many frames
+		changed |= forestcraft$set(o.enableVsync(), false);          // a hidden window has no screen to wait for
+		changed |= forestcraft$set(o.ambientOcclusion(), false);     // Minecraft's terrain is never drawn
+		changed |= forestcraft$set(o.biomeBlendRadius(), 0);
+		changed |= forestcraft$set(o.chunkSectionFadeInTime(), 0.0);
+		changed |= forestcraft$set(o.entityShadows(), false);
+		changed |= forestcraft$set(o.menuBackgroundBlurriness(), 0); // blur pass behind the inventory
+		changed |= forestcraft$set(o.weatherRadius(), 3);
+		if (changed) {
+			o.save();
+			ForestLink.LOG.info("Minecraft settings lightened for ForestCraft");
+		}
+	}
+
+	private int forestcraft$fpsTicks;
+	private int forestcraft$fpsTries;
+
+	/**
+	 * Every Minecraft frame is copied to The Forest, which shows at most its own frame rate:
+	 * Minecraft renders just above it (never under 30, never over 60). Not saved to options.
+	 */
+	private void forestcraft$matchFps(Minecraft minecraft) {
+		if (++forestcraft$fpsTicks % 10 != 0 || ForestLink.buffer() == null) return;
+		float fps = ForestLink.buffer().getFloat(Proto.OFF_FOREST + 200);
+		if (!(fps > 1f) || fps > 1000f) return;
+		// The option takes steps of 10: the next step above The Forest's rate.
+		int target = Math.max(30, Math.min(60, ((int) Math.ceil(fps / 10f) + 1) * 10));
+		if (minecraft.gui.screen() != null) target = 60; // inventory/chat: full rate for the cursor
+		var limit = minecraft.options.framerateLimit();
+		if (limit.get() != target && forestcraft$fpsTries < 20) {
+			forestcraft$fpsTries++;
+			try { limit.set(target); } catch (RuntimeException e) { /* keep */ }
+			if (limit.get() == target) forestcraft$fpsTries = 0;
+		}
+	}
+
+	private static <T> boolean forestcraft$set(net.minecraft.client.OptionInstance<T> option, T value) {
+		if (java.util.Objects.equals(option.get(), value)) return false;
+		try {
+			option.set(value);
+			return true;
+		} catch (RuntimeException e) {
+			return false; // a value this version doesn't accept: leave it
+		}
+	}
+
 	private void forestcraft$view(Minecraft minecraft) {
 		ForestLink.ForestView view = ForestLink.readView();
 		if (view == null) return;
@@ -158,12 +239,25 @@ public abstract class MinecraftMixin {
 		if (minecraft.options.getCameraType() != wanted) minecraft.options.setCameraType(wanted);
 		if (minecraft.options.cloudStatus().get() != net.minecraft.client.CloudStatus.OFF)
 			minecraft.options.cloudStatus().set(net.minecraft.client.CloudStatus.OFF);
+		forestcraft$lightweight(minecraft);
+		forestcraft$matchFps(minecraft);
 		int w = view.frameW(), h = view.frameH();
 		if (w >= 320 && h >= 240 && w <= 1920 && h <= 1080 && (w != forestcraft$frameW || h != forestcraft$frameH)) {
 			forestcraft$frameW = w;
 			forestcraft$frameH = h;
+			forestcraft$resizeTicks = 0;
 			GLFW.glfwSetWindowSize(minecraft.getWindow().handle(), w, h);
 			ForestLink.LOG.info("Minecraft frame size {}x{}", w, h);
+		}
+		// A hidden window doesn't always get its resize events: then the HUD and screens stayed
+		// at 854x480 (blurry, stretched) with the cursor off. Apply the size by hand.
+		var window = minecraft.getWindow();
+		if (forestcraft$frameW > 0 && (window.getWidth() != forestcraft$frameW || window.getHeight() != forestcraft$frameH)
+			&& ++forestcraft$resizeTicks == 10) {
+			WindowInvoker invoker = (WindowInvoker) (Object) window;
+			invoker.forestcraft$onResize(window.handle(), forestcraft$frameW, forestcraft$frameH);
+			invoker.forestcraft$onFramebufferResize(window.handle(), forestcraft$frameW, forestcraft$frameH);
+			ForestLink.LOG.info("Minecraft frame resized by hand to {}x{}", window.getWidth(), window.getHeight());
 		}
 		int slot = view.slot();
 		if (minecraft.player != null && slot >= 0 && slot < 9 && minecraft.player.getInventory().getSelectedSlot() != slot)
@@ -192,6 +286,7 @@ public abstract class MinecraftMixin {
 		if (ForestLink.forestInGame()) {
 			dev.forestcraft.BlockExport.publishHit(minecraft);
 			dev.forestcraft.EntityExport.publish();
+			dev.forestcraft.ParticleExport.publish();
 		}
 		FrameCapture.capture(minecraft);
 	}
