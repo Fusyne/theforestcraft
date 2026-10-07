@@ -81,7 +81,7 @@ namespace ForestCraft
             if (open) { Close(true); return; }
             if (!LocalPlayer.Inventory.Owns(id))
             {
-                Plugin.Log.LogInfo("ForestCraft: no map yet (it is in the hanging cave, or F8 > Monde)");
+                Plugin.Log.LogInfo("ForestCraft: no map yet (it is in the hanging cave, or F8 > World)");
                 return;
             }
             LocalPlayer.Inventory.Equip(id, false);

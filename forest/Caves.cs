@@ -157,7 +157,7 @@ namespace ForestCraft
             return land != null && feet.y < land.SampleHeight(feet) + land.transform.position.y - margin;
         }
 
-        /// <summary>F8 > Joueur: up onto the island's surface, out of the caves (stuck somewhere).</summary>
+        /// <summary>F8 > Player: up onto the island's surface, out of the caves (stuck somewhere).</summary>
         public static void Unstick()
         {
             Vector3 feet = Drive.LastFeet;

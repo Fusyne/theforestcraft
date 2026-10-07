@@ -47,111 +47,111 @@ namespace ForestCraft
         {
             pages = new List<Page>();
 
-            Page p = Add("Cannibales");
-            F(p, "Cannibale homme", "spawnenemy male");
-            F(p, "Cannibale femme", "spawnenemy female");
-            F(p, "Maigre (homme)", "spawnenemy male_skinny");
-            F(p, "Maigre (femme)", "spawnenemy female_skinny");
-            F(p, "Pâle", "spawnenemy pale");
-            F(p, "Pâle maigre", "spawnenemy skinny_pale");
-            F(p, "Pyromane", "spawnenemy fireman");
-            F(p, "Dynamiteur", "spawnenemy dynamiteman");
+            Page p = Add("Cannibals");
+            F(p, "Male cannibal", "spawnenemy male");
+            F(p, "Female cannibal", "spawnenemy female");
+            F(p, "Skinny (male)", "spawnenemy male_skinny");
+            F(p, "Skinny (female)", "spawnenemy female_skinny");
+            F(p, "Pale", "spawnenemy pale");
+            F(p, "Skinny pale", "spawnenemy skinny_pale");
+            F(p, "Fireman", "spawnenemy fireman");
+            F(p, "Dynamite man", "spawnenemy dynamiteman");
             F(p, "Virginia", "spawnenemy vags");
             F(p, "Armsy", "spawnenemy armsy");
-            F(p, "Bébé mutant", "spawnenemy baby");
+            F(p, "Mutant baby", "spawnenemy baby");
             F(p, "Cowman", "spawnenemy fat");
-            F(p, "Groupe de 5", "spawnenemy male --3", "spawnenemy female --2");
-            F(p, "Tuer le plus proche", "killclosestenemy");
-            F(p, "Assommer le plus proche", "knockdownclosestenemy");
-            F(p, "Tuer tous les ennemis", "killallenemies");
-            Toggle(p, "Ennemis actifs", "enemies", true, new[] { "enemies on" }, null, new[] { "enemies off" }, null);
+            F(p, "Group of 5", "spawnenemy male --3", "spawnenemy female --2");
+            F(p, "Kill the closest", "killclosestenemy");
+            F(p, "Knock down the closest", "knockdownclosestenemy");
+            F(p, "Kill all enemies", "killallenemies");
+            Toggle(p, "Enemies active", "enemies", true, new[] { "enemies on" }, null, new[] { "enemies off" }, null);
 
-            p = Add("Animaux");
-            F(p, "Lapin", "spawnanimal rabbit");
-            F(p, "Lézard", "spawnanimal lizard");
-            F(p, "Cerf", "spawnanimal deer");
-            F(p, "Sanglier", "spawnanimal boar");
-            F(p, "Raton laveur", "spawnanimal raccoon");
-            F(p, "Écureuil", "spawnanimal squirrel");
-            F(p, "Tortue de mer", "spawnanimal turtle");
-            F(p, "Tortue terrestre", "spawnanimal tortoise");
+            p = Add("Animals");
+            F(p, "Rabbit", "spawnanimal rabbit");
+            F(p, "Lizard", "spawnanimal lizard");
+            F(p, "Deer", "spawnanimal deer");
+            F(p, "Boar", "spawnanimal boar");
+            F(p, "Raccoon", "spawnanimal raccoon");
+            F(p, "Squirrel", "spawnanimal squirrel");
+            F(p, "Sea turtle", "spawnanimal turtle");
+            F(p, "Tortoise", "spawnanimal tortoise");
             F(p, "Crocodile", "spawnanimal crocodile");
-            F(p, "Tuer le plus proche", "killclosestanimal");
-            F(p, "Tuer tous les animaux", "killallanimals");
-            Toggle(p, "Animaux actifs", "animals", true, new[] { "animals on" }, null, new[] { "animals off" }, null);
-            Toggle(p, "Oiseaux actifs", "birds", true, new[] { "birds on" }, null, new[] { "birds off" }, null);
+            F(p, "Kill the closest", "killclosestanimal");
+            F(p, "Kill all animals", "killallanimals");
+            Toggle(p, "Animals active", "animals", true, new[] { "animals on" }, null, new[] { "animals off" }, null);
+            Toggle(p, "Birds active", "birds", true, new[] { "birds on" }, null, new[] { "birds off" }, null);
 
-            p = Add("Mobs Minecraft");
+            p = Add("Minecraft mobs");
             Summon(p, "Zombie", "zombie");
-            Summon(p, "Squelette", "skeleton");
+            Summon(p, "Skeleton", "skeleton");
             Summon(p, "Creeper", "creeper");
-            Summon(p, "Araignée", "spider");
+            Summon(p, "Spider", "spider");
             Summon(p, "Enderman", "enderman");
-            Summon(p, "Sorcière", "witch");
-            Summon(p, "Vache", "cow");
-            Summon(p, "Cochon", "pig");
-            Summon(p, "Mouton", "sheep");
-            Summon(p, "Poulet", "chicken");
-            Summon(p, "Loup", "wolf");
-            Summon(p, "Renard", "fox");
-            Summon(p, "Cheval", "horse");
-            Summon(p, "Villageois", "villager");
-            Summon(p, "Golem de fer", "iron_golem");
-            M(p, "Tuer les mobs proches", "kill @e[type=!minecraft:player,distance=..64]");
+            Summon(p, "Witch", "witch");
+            Summon(p, "Cow", "cow");
+            Summon(p, "Pig", "pig");
+            Summon(p, "Sheep", "sheep");
+            Summon(p, "Chicken", "chicken");
+            Summon(p, "Wolf", "wolf");
+            Summon(p, "Fox", "fox");
+            Summon(p, "Horse", "horse");
+            Summon(p, "Villager", "villager");
+            Summon(p, "Iron golem", "iron_golem");
+            M(p, "Kill nearby mobs", "kill @e[type=!minecraft:player,distance=..64]");
 
-            p = Add("Joueur");
+            p = Add("Player");
             Toggle(p, "Invincible", "god", false,
                 new[] { "godmode on" },
                 new[] { "effect give @s minecraft:resistance infinite 4 true", "effect give @s minecraft:saturation infinite 0 true" },
                 new[] { "godmode off" },
                 new[] { "effect clear @s minecraft:resistance", "effect clear @s minecraft:saturation" });
-            Both(p, "Soigner tout", new[] { "setstat full" },
+            Both(p, "Heal fully", new[] { "setstat full" },
                 new[] { "effect give @s minecraft:instant_health 1 5 true", "effect give @s minecraft:saturation 1 20 true" });
-            Toggle(p, "Mode créatif", "creative", false, null, new[] { "gamemode creative" }, null, new[] { "gamemode survival" });
-            Toggle(p, "Vision nocturne", "night", false, null, new[] { "effect give @s minecraft:night_vision infinite 0 true" },
+            Toggle(p, "Creative mode", "creative", false, null, new[] { "gamemode creative" }, null, new[] { "gamemode survival" });
+            Toggle(p, "Night vision", "night", false, null, new[] { "effect give @s minecraft:night_vision infinite 0 true" },
                 null, new[] { "effect clear @s minecraft:night_vision" });
-            M(p, "Vitesse (1 min)", "effect give @s minecraft:speed 60 2 true");
-            M(p, "+30 niveaux d'XP", "xp add @s 30 levels");
+            M(p, "Speed (1 min)", "effect give @s minecraft:speed 60 2 true");
+            M(p, "+30 XP levels", "xp add @s 30 levels");
             p.Entries.Add(new Entry
             {
-                Label = "Invisible (ennemis)",
+                Label = "Invisible (to enemies)",
                 State = () => Stealth.On,
                 Do = () => Stealth.Set(!Stealth.On),
                 Forest = new[] { "invisible on" },
                 ForestOff = new[] { "invisible off" },
             });
-            ToggleState(p, "Énergie infinie", () => Cheats.InfiniteEnergy, "energyhack on", "energyhack off");
-            Act(p, "Débloquer (remonter à la surface)", Caves.Unstick);
-            M(p, "Mourir (Minecraft)", "kill @s");
-            F(p, "Mourir (The Forest)", "killlocalplayer");
+            ToggleState(p, "Infinite energy", () => Cheats.InfiniteEnergy, "energyhack on", "energyhack off");
+            Act(p, "Unstuck (back to the surface)", Caves.Unstick);
+            M(p, "Die (Minecraft)", "kill @s");
+            F(p, "Die (The Forest)", "killlocalplayer");
 
-            p = Add("Objets");
-            M(p, "Épée en diamant", "give @s minecraft:diamond_sword");
-            M(p, "Arc + 64 flèches", "give @s minecraft:bow", "give @s minecraft:arrow 64");
-            M(p, "Outils en diamant", "give @s minecraft:diamond_pickaxe", "give @s minecraft:diamond_axe", "give @s minecraft:diamond_shovel");
-            M(p, "Armure en fer", "give @s minecraft:iron_helmet", "give @s minecraft:iron_chestplate", "give @s minecraft:iron_leggings", "give @s minecraft:iron_boots");
-            M(p, "Armure en diamant", "give @s minecraft:diamond_helmet", "give @s minecraft:diamond_chestplate", "give @s minecraft:diamond_leggings", "give @s minecraft:diamond_boots");
+            p = Add("Items");
+            M(p, "Diamond sword", "give @s minecraft:diamond_sword");
+            M(p, "Bow + 64 arrows", "give @s minecraft:bow", "give @s minecraft:arrow 64");
+            M(p, "Diamond tools", "give @s minecraft:diamond_pickaxe", "give @s minecraft:diamond_axe", "give @s minecraft:diamond_shovel");
+            M(p, "Iron armor", "give @s minecraft:iron_helmet", "give @s minecraft:iron_chestplate", "give @s minecraft:iron_leggings", "give @s minecraft:iron_boots");
+            M(p, "Diamond armor", "give @s minecraft:diamond_helmet", "give @s minecraft:diamond_chestplate", "give @s minecraft:diamond_leggings", "give @s minecraft:diamond_boots");
             M(p, "64 torches", "give @s minecraft:torch 64");
-            M(p, "32 steaks cuits", "give @s minecraft:cooked_beef 32");
-            M(p, "8 pommes dorées", "give @s minecraft:golden_apple 8");
-            M(p, "64 planches", "give @s minecraft:oak_planks 64");
-            M(p, "64 pierres", "give @s minecraft:cobblestone 64");
-            M(p, "Établi + four", "give @s minecraft:crafting_table", "give @s minecraft:furnace");
-            M(p, "Seau d'eau", "give @s minecraft:water_bucket");
-            M(p, "Vider l'inventaire", "clear @s");
-            F(p, "Tous les objets (Forest)", "addallitems");
-            Toggle(p, "Objets infinis (Forest)", "itemhack", false, new[] { "itemhack on" }, null, new[] { "itemhack off" }, null);
+            M(p, "32 cooked steaks", "give @s minecraft:cooked_beef 32");
+            M(p, "8 golden apples", "give @s minecraft:golden_apple 8");
+            M(p, "64 planks", "give @s minecraft:oak_planks 64");
+            M(p, "64 cobblestone", "give @s minecraft:cobblestone 64");
+            M(p, "Crafting table + furnace", "give @s minecraft:crafting_table", "give @s minecraft:furnace");
+            M(p, "Water bucket", "give @s minecraft:water_bucket");
+            M(p, "Clear inventory", "clear @s");
+            F(p, "All items (The Forest)", "addallitems");
+            Toggle(p, "Infinite items (The Forest)", "itemhack", false, new[] { "itemhack on" }, null, new[] { "itemhack off" }, null);
 
-            p = Add("Monde");
-            Act(p, "Plein jour (midi)", () => SetTime(358f));
-            Act(p, "Nuit (minuit)", () => SetTime(180f));
-            Act(p, "Coucher du soleil", () => SetTime(75f));
-            F(p, "Pluie forte", "forcerain heavy");
-            F(p, "Beau temps", "forcerain sunny");
-            F(p, "Carte (M) + grottes révélées", "additem MapFull", "additem CaveMap", "revealcavemap");
-            F(p, "Aller à l'épave de l'avion", "goto Hull");
-            ToggleState(p, "Construction instantanée", () => Cheats.Creative, "buildhack on", "buildhack off");
-            F(p, "Sauvegarder", "save");
+            p = Add("World");
+            Act(p, "Full day (noon)", () => SetTime(358f));
+            Act(p, "Night (midnight)", () => SetTime(180f));
+            Act(p, "Sunset", () => SetTime(75f));
+            F(p, "Heavy rain", "forcerain heavy");
+            F(p, "Clear weather", "forcerain sunny");
+            F(p, "Map (M) + caves revealed", "additem MapFull", "additem CaveMap", "revealcavemap");
+            F(p, "Go to the plane wreck", "goto Hull");
+            ToggleState(p, "Instant building", () => Cheats.Creative, "buildhack on", "buildhack off");
+            F(p, "Save", "save");
 
             p = Add("Perf");
             foreach (int fps in new[] { 60, 90, 120, 144, 0 })
@@ -159,7 +159,7 @@ namespace ForestCraft
                 int f = fps;
                 p.Entries.Add(new Entry
                 {
-                    Label = f == 0 ? "FPS illimités" : "Limiter à " + f + " FPS",
+                    Label = f == 0 ? "Unlimited FPS" : "Cap at " + f + " FPS",
                     State = () => Plugin.MaxFps != null && Plugin.MaxFps.Value == f,
                     Do = () => { if (Plugin.MaxFps != null) Plugin.MaxFps.Value = f; },
                     Radio = true,
@@ -181,7 +181,7 @@ namespace ForestCraft
         static void SetTime(float timeOfDay)
         {
             var atmo = TheForest.Utils.Scene.Atmosphere;
-            if (atmo == null) throw new Exception("pas d'atmosphère (pas en jeu ?)");
+            if (atmo == null) throw new Exception("no atmosphere (not in a game?)");
             atmo.TimeOfDay = timeOfDay;
             atmo.ForceSunRotationUpdate = true;
         }
@@ -276,22 +276,22 @@ namespace ForestCraft
                 {
                     foreach (string c in forest)
                     {
-                        if (!DevConsole.RunForest(c)) { Say("La console de The Forest n'est pas disponible"); return; }
+                        if (!DevConsole.RunForest(c)) { Say("The Forest's console isn't available"); return; }
                     }
                 }
                 if (mc != null)
                 {
-                    if (Link.View == IntPtr.Zero || !Link.Driving) { Say("Minecraft n'a pas encore le corps : réessaie dans un instant"); return; }
+                    if (Link.View == IntPtr.Zero || !Link.Driving) { Say("Minecraft doesn't have the body yet: try again in a moment"); return; }
                     foreach (string c in mc) DevConsole.SendToMinecraft(c);
                 }
                 if (e.Key != null) flags[e.Key] = !off;
-                if (e.State != null) Say(e.Label + (off ? " : désactivé" : " : activé"));
-                else Say(e.Label + " : OK");
+                if (e.State != null) Say(e.Label + (off ? ": off" : ": on"));
+                else Say(e.Label + ": OK");
                 Plugin.Log.LogInfo("ForestCraft: mod menu -> " + e.Label);
             }
             catch (Exception ex)
             {
-                Say("Erreur : " + ex.Message);
+                Say("Error: " + ex.Message);
                 Plugin.Log.LogWarning("ForestCraft: mod menu '" + e.Label + "' failed: " + ex);
             }
         }
@@ -374,7 +374,7 @@ namespace ForestCraft
             float pad = 14f * s;
             float x0 = panel.x + pad, y = panel.y + pad, inner = w - 2f * pad;
 
-            GUI.Label(new Rect(x0, y, inner, 30f * s), "ForestCraft : menu de test", titleStyle);
+            GUI.Label(new Rect(x0, y, inner, 30f * s), "ForestCraft: test menu", titleStyle);
             y += 38f * s;
 
             // Tabs
@@ -411,7 +411,7 @@ namespace ForestCraft
             float by = panel.yMax - pad - 26f * s;
             if (Time.realtimeSinceStartup - statusTime < 6f)
                 GUI.Label(new Rect(x0, by, inner * 0.62f, 26f * s), status, statusStyle);
-            GUI.Label(new Rect(x0 + inner * 0.62f, by, inner * 0.38f, 26f * s), "F8 / Échap : fermer   Tab : onglet suivant", hintStyle);
+            GUI.Label(new Rect(x0 + inner * 0.62f, by, inner * 0.38f, 26f * s), "F8 / Esc: close   Tab: next page", hintStyle);
 
             DrawCursor();
         }

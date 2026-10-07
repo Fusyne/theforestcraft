@@ -41,7 +41,7 @@ running in the background, while you see the world of The Forest. Inspired by
 >    | Mid-range | **90 FPS** |
 >    | Powerful | **120 FPS** (default) |
 >
->    If Minecraft's hand or HUD still stutters, take the step below. Avoid *FPS illimités*.
+>    If Minecraft's hand or HUD still stutters, take the step below. Avoid *Unlimited FPS*.
 
 To update: download the new release and run `install.bat` again.
 To reset everything (Minecraft world + dug terrain): `reset.bat`
@@ -68,7 +68,7 @@ What `install.bat` does:
 | Right click | place / use |
 | 1–9, mouse wheel | hotbar |
 | E | pick up / interact in The Forest (picked-up items become Minecraft items); at a cave mouth or a rope: straight through to the other side |
-| M | The Forest's map in Steve's hands (once found, as in the game; F8 > Monde gives it) |
+| M | The Forest's map in Steve's hands (once found, as in the game; F8 > World gives it) |
 | I | Minecraft inventory |
 | T, / | chat, command |
 | F5 | third-person view |
@@ -103,7 +103,7 @@ around it.
 Cave mouths and doors take you straight through (no squeeze animation, no fade), and E at a rope
 takes you to its other end, onto the ground beside the top or down at its foot. Ropes can also be
 climbed like ladders: forward or Space up, back down, Shift to hold on. Stuck somewhere? F8 >
-Joueur > Débloquer puts you back on the surface.
+Player > Unstuck puts you back on the surface.
 
 ## Size
 
@@ -143,12 +143,12 @@ Tab switches page. Nothing reaches the game while it is open.
 
 | Page | Buttons |
 |---|---|
-| Cannibales | every cannibal and mutant (Virginia, Armsy, Cowman, babies…), a group of 5, kill / knock out the closest, kill all, enemies on/off |
-| Animaux | rabbit, lizard, deer, boar, raccoon, squirrel, turtles, crocodile; kill; animals and birds on/off |
-| Mobs Minecraft | zombie, skeleton, creeper, spider, enderman, witch, farm animals, wolf, fox, horse, villager, iron golem; kill nearby Minecraft mobs |
-| Joueur | invincible, heal, creative mode, night vision, speed, XP, invisible to enemies, infinite energy, unstuck (back up onto the surface, out of the caves), die (Minecraft or The Forest) |
-| Objets | diamond sword and tools, bow and arrows, iron/diamond armour, torches, food, blocks, clear inventory; all of The Forest's items |
-| Monde | noon, midnight, sunset, rain, sun, The Forest's map with every cave revealed, go to the plane wreck, instant building, save |
+| Cannibals | every cannibal and mutant (Virginia, Armsy, Cowman, babies…), a group of 5, kill / knock out the closest, kill all, enemies on/off |
+| Animals | rabbit, lizard, deer, boar, raccoon, squirrel, turtles, crocodile; kill; animals and birds on/off |
+| Minecraft mobs | zombie, skeleton, creeper, spider, enderman, witch, farm animals, wolf, fox, horse, villager, iron golem; kill nearby Minecraft mobs |
+| Player | invincible, heal, creative mode, night vision, speed, XP, invisible to enemies, infinite energy, unstuck (back up onto the surface, out of the caves), die (Minecraft or The Forest) |
+| Items | diamond sword and tools, bow and arrows, iron/diamond armour, torches, food, blocks, clear inventory; all of The Forest's items |
+| World | noon, midnight, sunset, rain, sun, The Forest's map with every cave revealed, go to the plane wreck, instant building, save |
 | Perf | cap The Forest at 60 / 90 / 120 / 144 FPS, or no cap |
 
 Minecraft commands from the menu (and from `mc` in the console) run with operator rights, so
