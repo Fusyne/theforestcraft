@@ -362,7 +362,17 @@ namespace ForestCraft
             nextFpsCheck = Time.realtimeSinceStartup + 1f;
             int cap = MaxFps != null ? MaxFps.Value : 0;
             int want = cap > 0 ? cap : -1;
-            if (cap > 0 && QualitySettings.vSyncCount != 0) return; // vsync already caps it
+            if (cap > 0 && QualitySettings.vSyncCount != 0)
+            {
+                // V-sync caps at the screen's rate, and Unity ignores the cap while it is on: on a
+                // 144 Hz screen The Forest ran at 144 FPS whatever the cap said, and Minecraft
+                // (sharing the graphics card) stuttered. Under the cap, v-sync does the job;
+                // above it, v-sync goes off and the cap takes over.
+                int hz = Screen.currentResolution.refreshRate;
+                if (hz > 0 && hz <= cap + 2) return;
+                QualitySettings.vSyncCount = 0;
+                Log.LogInfo("ForestCraft: v-sync off (" + hz + " Hz screen): FPS capped at " + cap + " instead");
+            }
             if (Application.targetFrameRate != want) Application.targetFrameRate = want;
         }
 

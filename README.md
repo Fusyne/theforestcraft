@@ -8,6 +8,8 @@ running in the background, while you see the world of The Forest. Inspired by
 ![Steve in The Forest, a Minecraft cow and a cannibal nearby](docs/screenshot.jpg)
 
 > Single-player only for now. Windows only.
+>
+> **⚠️ Turn V-Sync off in The Forest's options and set an FPS cap in F8 → Perf** (see [Installation](#installation-players)).
 
 ## Requirements
 
@@ -24,6 +26,22 @@ running in the background, while you see the world of The Forest. Inspired by
    (top right → *Manage Accounts*) and launch the **ForestCraft** instance once so Prism
    downloads Minecraft and Java (it may close on its own, that's expected).
 4. Start **The Forest** from Steam. Minecraft starts by itself in the background.
+
+> [!IMPORTANT]
+> ## ⚠️ Before playing: turn V-Sync OFF and set an FPS cap
+>
+> 1. **In The Forest's options, turn V-Sync off.** With V-Sync on, the FPS cap is ignored and
+>    The Forest runs as fast as your screen (144 Hz, 165 Hz…): Minecraft, which shares the
+>    graphics card and draws your hand and HUD, then stutters.
+> 2. **In game, press F8 → page *Perf* and pick a cap that fits your PC:**
+>
+>    | Your PC | Cap |
+>    |---|---|
+>    | Modest (older or laptop graphics card) | **60 FPS** |
+>    | Mid-range | **90 FPS** |
+>    | Powerful | **120 FPS** (default) |
+>
+>    If Minecraft's hand or HUD still stutters, take the step below. Avoid *FPS illimités*.
 
 To update: download the new release and run `install.bat` again.
 To reset everything (Minecraft world + dug terrain): `reset.bat`
@@ -111,10 +129,12 @@ and leave a crater in the ground.
 
 ## Performance
 
-The Forest is capped at 120 FPS by default (`[Performance] MaxFps`, 0 = no cap, also in the F8
-menu). Both games share the graphics card: with The Forest running flat out, Minecraft (which
-draws the hand and the HUD) had to wait its turn and stuttered for up to 200 ms. With the cap
-it stays smooth, even in Ultra.
+**Turn V-Sync off in The Forest's options and pick an FPS cap in F8 → Perf** (60, 90, 120 or 144;
+see the box under *Installation*). The cap is also `[Performance] MaxFps` in
+`dev.forestcraft.cfg` (120 by default, 0 = no cap). Both games share the graphics card: with The
+Forest running flat out, Minecraft (which draws the hand and the HUD) has to wait its turn and
+stutters for up to 200 ms. With the cap it stays smooth, even in Ultra. If V-Sync is left on and
+the screen is faster than the cap, ForestCraft turns V-Sync off itself.
 
 ## Test menu (F8)
 
