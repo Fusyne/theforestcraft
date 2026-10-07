@@ -141,6 +141,8 @@ namespace ForestCraft
             }
             root.position = rootPos;
             root.rotation = Quaternion.Euler(0f, yaw, 0f);
+            LastRootSet = rootPos;
+            HasLastRoot = true;
             PoseCamera(targetFeet, yaw, pitch, mode);
             fpc.MovementLocked = true;
             HoldRotators();
@@ -245,8 +247,13 @@ namespace ForestCraft
             return Mathf.Max(0.3f, best - 0.1f);
         }
 
+        // Where Apply put the body last: if it is somewhere else next frame, The Forest moved it.
+        public static Vector3 LastRootSet;
+        public static bool HasLastRoot;
+
         public static void Release()
         {
+            HasLastRoot = false;
             lastTick = -1;
             camPosed = false;
             if (savedFov > 0f)
@@ -300,6 +307,8 @@ namespace ForestCraft
             {
                 Renderer r = scan[i];
                 if (r == null || !r.enabled) continue;
+                // The Forest's map, out in Steve's hands: it stays visible.
+                if (HeldMap.Keeps(r)) continue;
                 // Under the camera only models (held items, arms): rain, splashes and other
                 // camera effects are particles and must keep showing.
                 if (meshesOnly && !(r is MeshRenderer) && !(r is SkinnedMeshRenderer)) continue;

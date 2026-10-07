@@ -53,6 +53,38 @@ public final class ForestEvents {
 				for (int i = 0; i < 6; i++)
 					level.addParticle(ParticleTypes.CRIT, x, y, z, (random.nextDouble() - 0.5) * 0.6, random.nextDouble() * 0.4, (random.nextDouble() - 0.5) * 0.6);
 			}
+			case 8 -> {
+				// A critical blow (jump attack) on one of The Forest's creatures.
+				level.playLocalSound(x, y, z, SoundEvents.PLAYER_ATTACK_CRIT, SoundSource.PLAYERS, 1.0f, 0.9f + random.nextFloat() * 0.2f, false);
+				level.playLocalSound(x, y, z, SoundEvents.PLAYER_ATTACK_KNOCKBACK, SoundSource.PLAYERS, 0.8f, 1.0f, false);
+				for (int i = 0; i < 18; i++)
+					level.addParticle(ParticleTypes.CRIT, x, y, z, (random.nextDouble() - 0.5) * 1.0, random.nextDouble() * 0.6, (random.nextDouble() - 0.5) * 1.0);
+			}
+			case 9 -> {
+				// Flint and steel / fire charge set a creature alight.
+				level.playLocalSound(x, y, z, SoundEvents.FLINTANDSTEEL_USE, SoundSource.PLAYERS, 1.0f, 0.9f + random.nextFloat() * 0.2f, false);
+				for (int i = 0; i < 10; i++)
+					level.addParticle(ParticleTypes.FLAME, x + (random.nextDouble() - 0.5) * 0.6, y + random.nextDouble() * 0.8, z + (random.nextDouble() - 0.5) * 0.6, 0, 0.03, 0);
+			}
+			case 10 -> {
+				// A bucket of lava poured on a creature.
+				level.playLocalSound(x, y, z, SoundEvents.BUCKET_EMPTY_LAVA, SoundSource.PLAYERS, 1.0f, 1.0f, false);
+				level.playLocalSound(x, y, z, SoundEvents.LAVA_POP, SoundSource.BLOCKS, 1.0f, 1.0f, false);
+				for (int i = 0; i < 16; i++)
+					level.addParticle(ParticleTypes.LAVA, x, y + 0.5, z, 0, 0, 0);
+			}
+			case 11 -> {
+				// Water thrown on a burning creature.
+				level.playLocalSound(x, y, z, SoundEvents.BUCKET_EMPTY, SoundSource.PLAYERS, 1.0f, 1.0f, false);
+				level.playLocalSound(x, y, z, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 0.8f, 1.0f, false);
+				for (int i = 0; i < 16; i++)
+					level.addParticle(ParticleTypes.SPLASH, x + (random.nextDouble() - 0.5), y + random.nextDouble(), z + (random.nextDouble() - 0.5), 0, 0.1, 0);
+				for (int i = 0; i < 6; i++)
+					level.addParticle(ParticleTypes.LARGE_SMOKE, x, y + 0.8, z, 0, 0.05, 0);
+			}
+			case 12 -> level.playLocalSound(x, y, z, SoundEvents.LEAD_TIED, SoundSource.NEUTRAL, 1.0f, 1.0f, false);
+			case 13 -> level.playLocalSound(x, y, z, SoundEvents.LEAD_BREAK, SoundSource.NEUTRAL, 1.0f, 1.0f, false);
+			case 14 -> level.playLocalSound(x, y, z, SoundEvents.LEAD_UNTIED, SoundSource.NEUTRAL, 1.0f, 1.0f, false);
 			case 4 -> hit(minecraft, Blocks.OAK_LEAVES.defaultBlockState(), x, y, z, false);
 			case 5 -> hit(minecraft, Blocks.STONE.defaultBlockState(), x, y, z, false);
 			default -> hit(minecraft, Blocks.IRON_BLOCK.defaultBlockState(), x, y, z, false);

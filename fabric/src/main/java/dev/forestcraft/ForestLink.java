@@ -155,23 +155,16 @@ public final class ForestLink {
 		if (step != null && step.getBaseValue() != 1.0) step.setBaseValue(1.0);
 	}
 
-	/** First time on the island: a hotbar to build with (the Minecraft inventory screen is not reachable yet). */
+	/**
+	 * First time on the island: nothing but a redstone torch, The Forest's lighter (held, it
+	 * lights the way at night). The rest is found on the island, like The Forest's axe in the plane.
+	 */
 	public static void starterKit(ServerPlayer player) {
 		if (player.entityTags().contains("forestcraft_kit")) return;
 		var inv = player.getInventory();
-		net.minecraft.world.item.Item[] kit = {
-			net.minecraft.world.item.Items.OAK_PLANKS, net.minecraft.world.item.Items.COBBLESTONE,
-			net.minecraft.world.item.Items.DIRT, net.minecraft.world.item.Items.OAK_LOG,
-			net.minecraft.world.item.Items.GLASS, net.minecraft.world.item.Items.TORCH,
-			net.minecraft.world.item.Items.IRON_PICKAXE, net.minecraft.world.item.Items.IRON_AXE,
-			net.minecraft.world.item.Items.IRON_SHOVEL };
-		for (int i = 0; i < kit.length; i++) {
-			if (!inv.getItem(i).isEmpty()) continue;
-			int count = i < 6 ? 64 : 1;
-			inv.setItem(i, new net.minecraft.world.item.ItemStack(kit[i], count));
-		}
+		if (inv.getItem(0).isEmpty()) inv.setItem(0, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.REDSTONE_TORCH, 1));
 		player.addTag("forestcraft_kit");
-		LOG.info("starter hotbar given");
+		LOG.info("starter kit given: a redstone torch (the lighter)");
 	}
 
 	private static int worldTicks;
@@ -285,14 +278,49 @@ public final class ForestLink {
 	 * is spent on frames nobody sees.
 	 */
 	public static void paceToForest() {
-		if (!forestPlaying()) return;
-		long deadline = System.nanoTime() + 50_000_000L;
+		long start = System.nanoTime();
+		if (paceWorkFrom != 0) {
+			long work = start - paceWorkFrom;
+			paceFrames++;
+			paceWork += work;
+			if (work > paceWorst) paceWorst = work;
+			McPerf.endFrame(work);
+		}
+		if (!forestPlaying()) { paceWorkFrom = 0; return; }
+		long deadline = start + 50_000_000L;
 		int seq = map.getInt(Proto.OFF_FOREST) & ~1;
 		while (seq == pacedSeq && System.nanoTime() < deadline) {
 			java.util.concurrent.locks.LockSupport.parkNanos(200_000L);
 			seq = map.getInt(Proto.OFF_FOREST) & ~1;
 		}
 		pacedSeq = seq;
+		paceWorkFrom = System.nanoTime();
+	}
+
+	// Minecraft's own frame cost (from the end of one wait for The Forest to the next).
+	private static long paceWorkFrom, paceWork, paceWorst;
+	private static int paceFrames, perfTicks;
+
+	/** Every 30 s in the log: what Minecraft costs, to compare with The Forest's perf line. */
+	public static void perfLog(net.minecraft.client.Minecraft mc) {
+		if (++perfTicks < 600) return;
+		perfTicks = 0;
+		StringBuilder sb = new StringBuilder("perf last 30 s: ");
+		if (paceFrames > 0) sb.append(paceFrames / 30).append(" frames/s, frame work ")
+				.append(String.format(java.util.Locale.ROOT, "%.1f", paceWork / 1e6 / paceFrames)).append(" ms avg, worst ")
+				.append(String.format(java.util.Locale.ROOT, "%.0f", paceWorst / 1e6)).append(" ms");
+		var server = mc.getSingleplayerServer();
+		if (server != null) sb.append(", server tick ").append(String.format(java.util.Locale.ROOT, "%.1f", server.getAverageTickTimeNanos() / 1e6)).append(" ms");
+		if (mc.level != null) {
+			sb.append(", entities ").append(mc.level.getEntityCount());
+			sb.append(", sky darken ").append(mc.level.getSkyDarken());
+		}
+		sb.append(", particles ").append(mc.particleEngine.countParticles());
+		sb.append(", frame ").append(mc.getWindow().getWidth()).append('x').append(mc.getWindow().getHeight());
+		sb.append(McPerf.summary());
+		LOG.info(sb.toString());
+		paceFrames = 0;
+		paceWork = paceWorst = 0;
 	}
 
 	public static boolean forestInGame() {
@@ -384,6 +412,9 @@ public final class ForestLink {
 		player.resetFallDistance();
 		appliedTeleport = forest.teleportSeq;
 		LOG.info("teleport to forest feet {}, {}, {}", forest.x(), forest.y(), forest.z());
+		// Held still there until The Forest has scanned its colliders around this spot (the
+		// plane's cabin floor at the start of a game): it fell through them otherwise.
+		hold(player);
 	}
 
 	/** The Forest owns the look direction (mouse is read there every frame, no 20 Hz lag). */
@@ -447,17 +478,73 @@ public final class ForestLink {
 		return k > 1.5f ? Math.max(0.6f, 1.5f / k) : 1f;
 	}
 
-	/** Bit 1: in the caves, bit 2: in a cave entrance (The Forest, OFF_FOREST+212). */
+	// ---- Minecraft commands typed in The Forest's console ("mc <command>"), OFF 0xA19000 ------
+
+	private static final int OFF_COMMAND = 0xA19000;
+	private static int commandSeq = Integer.MIN_VALUE;
+
+	/** Server tick: run the command The Forest's console sent, as the player. */
+	/** Where Minecraft writes the last command block it took, so The Forest can send the next one. */
+	private static final int COMMAND_ACK = 1016;
+
+	/**
+	 * Commands from The Forest's console and the mod menu (F8). One block can hold several
+	 * commands, one per line; they run with operator rights (solo, the player's own test tools),
+	 * so summon/give/effect work even in a world without cheats.
+	 */
+	public static void runForestCommand(ServerPlayer player) {
+		if (map == null) return;
+		int seq = map.getInt(OFF_COMMAND);
+		if (commandSeq == Integer.MIN_VALUE) { commandSeq = seq; map.putInt(OFF_COMMAND + COMMAND_ACK, seq); return; }
+		if (seq == commandSeq) return;
+		commandSeq = seq;
+		int len = Math.max(0, Math.min(1000, map.getInt(OFF_COMMAND + 4)));
+		byte[] raw = new byte[len];
+		map.get(OFF_COMMAND + 8, raw);
+		map.putInt(OFF_COMMAND + COMMAND_ACK, seq);
+		String text = new String(raw, java.nio.charset.StandardCharsets.UTF_8);
+		var server = player.level().getServer();
+		if (server == null) return;
+		var source = player.createCommandSourceStack()
+				.withMaximumPermission(net.minecraft.server.permissions.LevelBasedPermissionSet.GAMEMASTER);
+		for (String line : text.split("\n")) {
+			String command = line.trim();
+			// "quiet:" = ForestCraft's own moves (cave mouths, unstuck): nothing said in the chat.
+			boolean quiet = command.startsWith("quiet:");
+			if (quiet) command = command.substring(6).trim();
+			if (command.startsWith("/")) command = command.substring(1);
+			if (command.isEmpty()) continue;
+			LOG.info("command from The Forest: /{}", command);
+			server.getCommands().performPrefixedCommand(quiet ? source.withSuppressedOutput() : source, command);
+		}
+	}
+
+	/**
+	 * Bit 1: in the caves, bit 2: in a cave entrance (The Forest, OFF_FOREST+212). Bit 4: just out
+	 * of a cave but still under the island's surface (a cave mouth under a hill): the island's
+	 * ground level with the body and above it is left out (it would wall the player in), what is
+	 * under the feet (feet height at OFF_FOREST+244) stays.
+	 */
 	private static volatile int caveFlags;
+	private static volatile float mouthFeet = Float.NaN;
 
 	/** Under the island (caves) or in an entrance hole: the heightmap ground isn't the floor. */
 	public static boolean underground() {
-		return caveFlags != 0;
+		return (caveFlags & 3) != 0;
+	}
+
+	/** The island's ground in this block is left out (caves, entrance, or a cave mouth at the body). */
+	private static boolean groundOff(int x, int y, int z) {
+		if ((caveFlags & 3) != 0) return true;
+		if ((caveFlags & 4) == 0 || !(y + 1 > mouthFeet + 0.02)) return false;
+		// Only around the player (a mob up on the hill keeps its ground).
+		return Math.abs(x - originX - Proto.GRID / 2) <= CAVE_REACH && Math.abs(z - originZ - Proto.GRID / 2) <= CAVE_REACH;
 	}
 
 	public static void refreshGrid() {
 		if (map == null) return;
 		caveFlags = map.getInt(Proto.OFF_FOREST + 212);
+		mouthFeet = map.getFloat(Proto.OFF_FOREST + 244);
 		refreshSolids();
 		refreshGround();
 		refreshWater();
@@ -563,7 +650,7 @@ public final class ForestLink {
 	private static final java.util.concurrent.ConcurrentHashMap<Long, net.minecraft.world.phys.shapes.VoxelShape> GROUND_SHAPES = new java.util.concurrent.ConcurrentHashMap<>();
 
 	private static net.minecraft.world.phys.shapes.VoxelShape groundShape(int x, int y, int z) {
-		if (caveFlags != 0 || TerrainDig.isConverted(x, y, z)) return null;
+		if (groundOff(x, y, z) || TerrainDig.isConverted(x, y, z)) return null;
 		double hc = heightAt(x, z);
 		if (Double.isNaN(hc)) return null;
 		double min = minHeight(x, z), max = maxHeight(x, z);
@@ -599,7 +686,7 @@ public final class ForestLink {
 
 	/** A cell of the island's ground only partly under the surface (not dug, not revealed). */
 	public static boolean isPartialGround(int x, int y, int z) {
-		if (caveFlags != 0 || TerrainDig.isConverted(x, y, z)) return false;
+		if (groundOff(x, y, z) || TerrainDig.isConverted(x, y, z)) return false;
 		double hc = heightAt(x, z), min = minHeight(x, z), max = maxHeight(x, z);
 		if (Double.isNaN(hc) || Double.isNaN(min) || Double.isNaN(max)) return false;
 		return y < max - 1.0e-3 && y + 1 > min - 0.02 && y >= Math.floor(hc) - 8;
@@ -640,7 +727,7 @@ public final class ForestLink {
 		if (Float.isNaN(h)) return Double.NaN;
 		int block = (int) Math.floor(h - 1e-4);
 		if (y > block || y < block - 8) return Double.NaN;
-		if (caveFlags != 0 && fine && Math.abs(lx - Proto.GRID / 2) <= CAVE_REACH && Math.abs(lz - Proto.GRID / 2) <= CAVE_REACH) return Double.NaN;
+		if (groundOff(x, y, z) && fine && Math.abs(lx - Proto.GRID / 2) <= CAVE_REACH && Math.abs(lz - Proto.GRID / 2) <= CAVE_REACH) return Double.NaN;
 		if (TerrainDig.isConverted(x, y, z)) return Double.NaN;
 		if (y < block) return 1.0;
 		double top = h - block;
@@ -763,7 +850,9 @@ public final class ForestLink {
 	/** Lowest point of the original surface over this column, or NaN. */
 	public static double minHeight(int x, int z) {
 		int lx = x - groundX, lz = z - groundZ;
-		if (groundSeq == 0 || lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID) return Double.NaN;
+		// Beyond the detailed grid around the player (a TNT lit from afar): the coarse far grid,
+		// or the crater's cells there were "no ground" and left without a floor.
+		if (groundSeq == 0 || lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID) return farHeight(x, z);
 		float v = mins[lz * Proto.GRID + lx];
 		return Float.isNaN(v) ? Double.NaN : v;
 	}
@@ -771,7 +860,7 @@ public final class ForestLink {
 	/** Highest point of the original surface over this column, or NaN. */
 	public static double maxHeight(int x, int z) {
 		int lx = x - groundX, lz = z - groundZ;
-		if (groundSeq == 0 || lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID) return Double.NaN;
+		if (groundSeq == 0 || lx < 0 || lz < 0 || lx >= Proto.GRID || lz >= Proto.GRID) return farHeight(x, z);
 		float v = maxs[lz * Proto.GRID + lx];
 		return Float.isNaN(v) ? Double.NaN : v;
 	}
@@ -845,8 +934,8 @@ public final class ForestLink {
 		if (Float.isNaN(surface) || y + 0.12 > surface) return false;
 		// The Forest's water volumes are often shallow boxes under the surface: outside the caves
 		// the water goes all the way down to the lake bed, or a swimmer sank out of it.
-		if (caveFlags != 0 && y + 1 <= waterBottom[i]) return false;
-		if (caveFlags == 0) {
+		if ((caveFlags & 3) != 0 && y + 1 <= waterBottom[i]) return false;
+		if ((caveFlags & 3) == 0) {
 			double hc = heightAt(x, z);
 			if (!Double.isNaN(hc)) {
 				if (hc >= surface) return false; // dry land (the sea's volume spans the island)
@@ -860,17 +949,40 @@ public final class ForestLink {
 
 	private static final int OFF_ROPES = 0xA36500;
 
+	private static long ropeLoggedAt;
+
+	/** Said in the log (at most every 5 s) when the player takes hold of a rope, and where. */
+	public static void ropeHeld(double x, double y, double z) {
+		long now = System.currentTimeMillis();
+		if (now - ropeLoggedAt < 5000) return;
+		ropeLoggedAt = now;
+		LOG.info("holding a rope of The Forest at {} {} {}", Math.round(x * 10) / 10.0, Math.round(y * 10) / 10.0, Math.round(z * 10) / 10.0);
+	}
+
 	/** Within reach of one of The Forest's ropes: climbs like a ladder. */
 	public static boolean ropeAt(double x, double y, double z) {
-		if (map == null) return false;
+		return ropeAxis(x, y, z) != null;
+	}
+
+	/**
+	 * The rope within reach at this height, as {x, z, t}: the point of the rope (from its bottom to
+	 * its top, t from 0 to 1) level with the feet, or null. Entries: bottom (x, z, y) then top.
+	 */
+	public static double[] ropeAxis(double x, double y, double z) {
+		if (map == null) return null;
 		int n = map.getInt(OFF_ROPES);
-		if (n <= 0 || n > 64) return false;
+		if (n <= 0 || n > 64) return null;
 		for (int i = 0; i < n; i++) {
-			int at = OFF_ROPES + 16 + i * 16;
-			double dx = map.getFloat(at) - x, dz = map.getFloat(at + 4) - z;
-			if (dx * dx + dz * dz > 1.0) continue;
-			if (y >= map.getFloat(at + 8) && y <= map.getFloat(at + 12)) return true;
+			int at = OFF_ROPES + 16 + i * 24;
+			double y0 = map.getFloat(at + 8), y1 = map.getFloat(at + 20);
+			if (y < y0 || y > y1) continue;
+			double t = y1 - y0 < 1.0e-3 ? 0.0 : Math.max(0.0, Math.min(1.0, (y - y0) / (y1 - y0)));
+			double ax = map.getFloat(at) + (map.getFloat(at + 12) - map.getFloat(at)) * t;
+			double az = map.getFloat(at + 4) + (map.getFloat(at + 16) - map.getFloat(at + 4)) * t;
+			double dx = ax - x, dz = az - z;
+			if (dx * dx + dz * dz > 1.2 * 1.2) continue;
+			return new double[] { ax, az, t };
 		}
-		return false;
+		return null;
 	}
 }

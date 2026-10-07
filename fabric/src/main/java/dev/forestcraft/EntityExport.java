@@ -155,7 +155,7 @@ public final class EntityExport {
 			if (q >= MAX_QUADS) return this;
 			int o = q * 20 + i * 5;
 			pos[o] = x + ox; pos[o + 1] = y + oy; pos[o + 2] = z + oz;
-			if (i == 3) { mat[q] = curMaterial; tint[q] = curTint; quads++; }
+			if (i == 3) { mat[q] = curMaterial; tint[q] = withOverlay(curTint); quads++; }
 			return this;
 		}
 		@Override public VertexConsumer setColor(int r, int g, int b, int a) { return this; }
@@ -179,6 +179,28 @@ public final class EntityExport {
 	}
 
 	@SuppressWarnings({"unchecked", "rawtypes"})
+	/**
+	 * Minecraft's overlay texture on what is drawn: red while hurt (v < 8, the tenth of a second
+	 * after a hit), white while flashing (u > 0: lit TNT, a creeper about to blow). The red goes
+	 * into the colour; the white level into the colour's top byte (0x80 | level), which The
+	 * Forest turns into a brighter material.
+	 */
+	private static final int NO_OVERLAY = 10 << 16;
+	private static int curOverlay = NO_OVERLAY;
+
+	private static int withOverlay(int argb) {
+		int u = curOverlay & 0xFFFF, v = (curOverlay >>> 16) & 0xFFFF;
+		if (u == 0 && v >= 8) return argb;
+		int r = (argb >> 16) & 255, g = (argb >> 8) & 255, b = argb & 255;
+		if (v < 8) { // hurt: Minecraft blends 30 % red over it
+			r = Math.min(255, (int) (r * 0.7f + 255 * 0.3f));
+			g = (int) (g * 0.7f);
+			b = (int) (b * 0.7f);
+		}
+		int top = u > 0 ? 0x80 | Math.min(15, u) : 0xFF;
+		return (top << 24) | (r << 16) | (g << 8) | b;
+	}
+
 	private static void model(Model model, Object state, PoseStack pose, RenderType type, int color, TextureAtlasSprite sprite) {
 		if (!open || model == null) return;
 		// Chests, shields, signs, banners...: the model's UVs are remapped into an atlas sprite.
@@ -230,8 +252,98 @@ public final class EntityExport {
 			var info = quad.materialInfo();
 			mat[q] = TextureAtlas.LOCATION_ITEMS.equals(info.sprite().atlasLocation()) ? -2 : -1;
 			int t = info.tintIndex();
-			tint[q] = t >= 0 && tints != null && t < tints.length ? tints[t] | 0xFF000000 : -1;
+			tint[q] = withOverlay(t >= 0 && tints != null && t < tints.length ? tints[t] | 0xFF000000 : -1);
 			quads++;
+		}
+	}
+
+	/**
+	 * A burning mob's fire: Minecraft's own FlameFeatureRenderer quads (stacked fire_0/fire_1
+	 * planes turned to the camera), as material -3: the blocks atlas, unlit in The Forest so the
+	 * fire glows at night too.
+	 */
+	private static void flame(PoseStack pose, net.minecraft.client.renderer.entity.state.EntityRenderState state, org.joml.Quaternionf rotation) {
+		if (!open || pose == null || state == null || rotation == null) return;
+		try {
+			var atlas = net.minecraft.client.Minecraft.getInstance().getAtlasManager();
+			TextureAtlasSprite fire1 = atlas.get(net.minecraft.client.resources.model.ModelBakery.FIRE_0);
+			TextureAtlasSprite fire2 = atlas.get(net.minecraft.client.resources.model.ModelBakery.FIRE_1);
+			if (fire1 == null || fire2 == null) return;
+			pose.pushPose();
+			float s = state.boundingBoxWidth * 1.4f;
+			if (s <= 0f) { pose.popPose(); return; }
+			pose.scale(s, s, s);
+			float r = 0.5f, h = state.boundingBoxHeight / s, yo = 0f, zo = 0f;
+			pose.mulPose(rotation);
+			pose.translate(0f, 0f, 0.3f - (int) h * 0.02f);
+			Matrix4f m = new Matrix4f(pose.last().pose());
+			pose.popPose();
+			int ss = 0;
+			Vector3f a = new Vector3f(), b = new Vector3f(), c = new Vector3f();
+			while (h > 0f && quads < MAX_QUADS) {
+				TextureAtlasSprite tex = ss % 2 == 0 ? fire1 : fire2;
+				float u0 = tex.getU0(), v0 = tex.getV0(), u1 = tex.getU1(), v1 = tex.getV1();
+				if (ss / 2 % 2 == 0) { float t = u1; u1 = u0; u0 = t; }
+				int q = quads;
+				float[][] corners = { { -r, -yo, u1, v1 }, { r, -yo, u0, v1 }, { r, 1.4f - yo, u0, v0 }, { -r, 1.4f - yo, u1, v0 } };
+				for (int i = 0; i < 4; i++) {
+					Vector3f p = m.transformPosition(new Vector3f(corners[i][0], corners[i][1], zo));
+					int o = q * 20 + i * 5;
+					pos[o] = p.x + ox; pos[o + 1] = p.y + oy; pos[o + 2] = p.z + oz;
+					pos[o + 3] = corners[i][2]; pos[o + 4] = corners[i][3];
+				}
+				// The plane's own normal (the Forest side winds each side by it).
+				a.set(pos[q * 20 + 5] - pos[q * 20], pos[q * 20 + 6] - pos[q * 20 + 1], pos[q * 20 + 7] - pos[q * 20 + 2]);
+				b.set(pos[q * 20 + 10] - pos[q * 20], pos[q * 20 + 11] - pos[q * 20 + 1], pos[q * 20 + 12] - pos[q * 20 + 2]);
+				a.cross(b, c);
+				if (c.lengthSquared() > 0f) c.normalize(); else c.set(0f, 1f, 0f);
+				nrm[q * 3] = c.x; nrm[q * 3 + 1] = c.y; nrm[q * 3 + 2] = c.z;
+				mat[q] = -3;
+				tint[q] = -1;
+				quads++;
+				h -= 0.45f;
+				yo -= 0.45f;
+				r *= 0.9f;
+				zo -= 0.03f;
+				ss++;
+			}
+		} catch (RuntimeException e) {
+			// never break the frame for a fire
+		}
+	}
+
+	/**
+	 * Blocks drawn as entities: lit TNT, TNT minecarts, falling sand and gravel, blocks carried
+	 * by endermen. Their model's quads, like an item's (blocks atlas).
+	 */
+	private static final Direction[] SIDES = { null, Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST };
+
+	private static void blockModel(PoseStack pose, Object type, List<?> parts, int[] tints) {
+		if (!open || parts == null) return;
+		// The glowing outline pass, not the block (every render type's description mentions its
+		// outline property: ask the type itself).
+		if (type instanceof RenderType rt && rt.isOutline()) return;
+		for (Object o : parts) {
+			if (!(o instanceof net.minecraft.client.renderer.block.dispatch.BlockStateModelPart part)) continue;
+			for (Direction d : SIDES) {
+				try { item(pose, tints, part.getQuads(d)); } catch (RuntimeException e) { return; }
+			}
+		}
+	}
+
+	private static final List<net.minecraft.client.renderer.block.dispatch.BlockStateModelPart> movingParts = new ArrayList<>();
+
+	private static void movingBlock(PoseStack pose, net.minecraft.client.renderer.block.MovingBlockRenderState moving) {
+		if (!open || moving == null || moving.blockState == null) return;
+		try {
+			var model = net.minecraft.client.Minecraft.getInstance().getModelManager().getBlockStateModelSet().get(moving.blockState);
+			if (model == null) return;
+			movingParts.clear();
+			long seed = moving.blockState.getSeed(moving.randomSeedPos != null ? moving.randomSeedPos : net.minecraft.core.BlockPos.ZERO);
+			model.collectParts(net.minecraft.util.RandomSource.create(seed), movingParts);
+			blockModel(pose, null, movingParts, null);
+		} catch (RuntimeException e) {
+			// never break the frame
 		}
 	}
 
@@ -253,15 +365,34 @@ public final class EntityExport {
 				String name = method.getName();
 				Class<?>[] p = method.getParameterTypes();
 				if (name.equals("submitItem") && args != null && args.length == 8) {
+					curOverlay = NO_OVERLAY;
 					item((PoseStack) args[0], (int[]) args[5], (List<BakedQuad>) args[6]);
 					return null;
 				}
 				if (name.equals("submitModel") && p.length == 10 && p[3] == RenderType.class) {
+					curOverlay = (Integer) args[5];
 					model((Model) args[0], args[1], (PoseStack) args[2], (RenderType) args[3], (Integer) args[6], (TextureAtlasSprite) args[7]);
+					curOverlay = NO_OVERLAY;
 					return null;
 				}
 				if (name.equals("submitModelPart") && args != null && args.length >= 6 && p[2] == RenderType.class) {
+					curOverlay = args[4] instanceof Integer o ? o : NO_OVERLAY;
 					part((ModelPart) args[0], (PoseStack) args[1], (RenderType) args[2], (TextureAtlasSprite) args[5]);
+					curOverlay = NO_OVERLAY;
+					return null;
+				}
+				if (name.equals("submitBlockModel") && args != null && args.length == 7) {
+					curOverlay = args[5] instanceof Integer o ? o : NO_OVERLAY;
+					blockModel((PoseStack) args[0], args[1], (List<?>) args[2], (int[]) args[3]);
+					curOverlay = NO_OVERLAY;
+					return null;
+				}
+				if (name.equals("submitMovingBlock") && args != null && args.length == 3) {
+					movingBlock((PoseStack) args[0], (net.minecraft.client.renderer.block.MovingBlockRenderState) args[1]);
+					return null;
+				}
+				if (name.equals("submitFlame") && args != null && args.length == 3) {
+					flame((PoseStack) args[0], (net.minecraft.client.renderer.entity.state.EntityRenderState) args[1], (org.joml.Quaternionf) args[2]);
 					return null;
 				}
 				if (method.getReturnType().isInstance(proxy)) return proxy; // order(n)
@@ -270,7 +401,7 @@ public final class EntityExport {
 				if (r == boolean.class) return false;
 				if (r == int.class) return 0;
 				if (r == float.class) return 0f;
-				return null; // shadows, name tags, flames, leashes: not drawn for now
+				return null; // shadows, name tags, leashes: not drawn for now
 			}
 		};
 		collector = (SubmitNodeCollector) Proxy.newProxyInstance(SubmitNodeCollector.class.getClassLoader(), new Class<?>[] {SubmitNodeCollector.class}, handler);

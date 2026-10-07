@@ -5,6 +5,8 @@ inventory, chat, blocks, mobs and combat all come from a hidden Minecraft 26.2 (
 running in the background, while you see the world of The Forest. Inspired by
 [SkyCraft](https://github.com/chasmlol/SkyCraft).
 
+![Steve in The Forest, a Minecraft cow and a cannibal nearby](docs/screenshot.jpg)
+
 > Single-player only for now. Windows only.
 
 ## Requirements
@@ -47,10 +49,13 @@ What `install.bat` does:
 | Left click | break / hit (trees, bushes, suitcases, cannibals…) |
 | Right click | place / use |
 | 1–9, mouse wheel | hotbar |
-| E | pick up / interact in The Forest (picked-up items become Minecraft items) |
+| E | pick up / interact in The Forest (picked-up items become Minecraft items); at a cave mouth or a rope: straight through to the other side |
+| M | The Forest's map in Steve's hands (once found, as in the game; F8 > Monde gives it) |
 | I | Minecraft inventory |
 | T, / | chat, command |
 | F5 | third-person view |
+| F1 | developer console (see below) |
+| F8 | test menu (see below) |
 | F9 | how the ground around holes is drawn: The Forest's terrain / Minecraft grass / nothing |
 
 ## Digging
@@ -75,12 +80,76 @@ cut it up (meat, skin, bones). Picked-up items become their Minecraft counterpar
 Minecraft animals and monsters (spawn eggs) walk on The Forest's island and find their way
 around it.
 
+## Caves and ropes
+
+Cave mouths and doors take you straight through (no squeeze animation, no fade), and E at a rope
+takes you to its other end, onto the ground beside the top or down at its foot. Ropes can also be
+climbed like ladders: forward or Space up, back down, Shift to hold on. Stuck somewhere? F8 >
+Joueur > Débloquer puts you back on the surface.
+
 ## Size
 
 `Scale` in `dev.forestcraft.cfg` (section `[World]`) sets how big Steve and the blocks are, in
 The Forest's units per block (0 = automatic, 1.8 at most). Each Minecraft world keeps the size
 it was created with (`forestcraft_scale.txt` in the world folder), so blocks and holes never
 move; a new size applies to new games.
+
+## Minecraft tools on The Forest's creatures
+
+Right click a cannibal or an animal with:
+
+| Item | Does |
+|---|---|
+| Flint and steel, fire charge | sets it alight (The Forest's own fire) |
+| Lava bucket | soaks it in fire: a long, strong burn, and it hurts |
+| Water bucket | puts the fire out |
+| Lead | ties it up: it is dragged along behind you; right click again to untie, too far and it snaps |
+
+Steve's fire and lava burn creatures that walk into them, his water puts them out, and TNT or
+creeper explosions blow them up the way The Forest's bombs do, bring down the trees around
+and leave a crater in the ground.
+
+## Performance
+
+The Forest is capped at 120 FPS by default (`[Performance] MaxFps`, 0 = no cap, also in the F8
+menu). Both games share the graphics card: with The Forest running flat out, Minecraft (which
+draws the hand and the HUD) had to wait its turn and stuttered for up to 200 ms. With the cap
+it stays smooth, even in Ultra.
+
+## Test menu (F8)
+
+F8 opens a clickable menu over the game; the mouse moves its cursor, F8 or Escape closes it,
+Tab switches page. Nothing reaches the game while it is open.
+
+| Page | Buttons |
+|---|---|
+| Cannibales | every cannibal and mutant (Virginia, Armsy, Cowman, babies…), a group of 5, kill / knock out the closest, kill all, enemies on/off |
+| Animaux | rabbit, lizard, deer, boar, raccoon, squirrel, turtles, crocodile; kill; animals and birds on/off |
+| Mobs Minecraft | zombie, skeleton, creeper, spider, enderman, witch, farm animals, wolf, fox, horse, villager, iron golem; kill nearby Minecraft mobs |
+| Joueur | invincible, heal, creative mode, night vision, speed, XP, invisible to enemies, infinite energy, unstuck (back up onto the surface, out of the caves), die (Minecraft or The Forest) |
+| Objets | diamond sword and tools, bow and arrows, iron/diamond armour, torches, food, blocks, clear inventory; all of The Forest's items |
+| Monde | noon, midnight, sunset, rain, sun, The Forest's map with every cave revealed, go to the plane wreck, instant building, save |
+| Perf | cap The Forest at 60 / 90 / 120 / 144 FPS, or no cap |
+
+Minecraft commands from the menu (and from `mc` in the console) run with operator rights, so
+they work in a world without cheats. `[Debug] ModMenu = false` in the config turns the menu off.
+
+## Developer console
+
+F1 opens The Forest's own developer console (the one `developermodeon` unlocks), switched on
+by the mod; Enter runs the command. A few useful ones:
+
+| Command | Does |
+|---|---|
+| `spawnmutant male` | a cannibal next to you (`female`, `male_skinny`, `pale`, `fireman`, `armsy`, `vags`, `baby`, `fat`…) |
+| `spawnanimal rabbit` | an animal (`deer`, `boar`, `lizard`, `raccoon`, `turtle`…) |
+| `killallenemies`, `killclosestenemy` | clean up |
+| `goto Hull` | go somewhere (Minecraft follows) |
+| `setCurrentDay 10`, `advanceday` | time |
+| `help` | every command |
+| `mc <command>` or `/<command>` | a Minecraft command: `mc summon zombie`, `mc give @p diamond_sword`, `mc time set night` |
+
+Turn it off with `DeveloperConsole = false` (section `[Debug]` of `dev.forestcraft.cfg`).
 
 ## Saves
 
@@ -112,8 +181,8 @@ The two games talk through shared memory (`%LOCALAPPDATA%\ForestCraft\link.bin`)
 
 ```bat
 build.bat
-git tag v0.3.0 && git push origin v0.3.0
-gh release create v0.3.0 dist\ForestCraft-0.3.0.zip --title "ForestCraft 0.3.0" --notes-file dist\notes.md
+git tag v0.4.0 && git push origin v0.4.0
+gh release create v0.4.0 dist\ForestCraft-0.4.0.zip --title "ForestCraft 0.4.0" --notes-file dist\notes.md
 ```
 
 ## License

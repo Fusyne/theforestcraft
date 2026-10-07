@@ -68,6 +68,10 @@ namespace ForestCraft
         {
             cache.Clear();
             verdict.Clear();
+            // Not ready until the blocks around the player are scanned again: the hand-over to
+            // Minecraft right after this (start of a new game, in the plane) waited for nothing,
+            // and Minecraft stood on a cabin floor that wasn't sent yet and fell through it.
+            NearReady = false;
         }
 
         static void BuildOrder()
@@ -177,11 +181,11 @@ namespace ForestCraft
         }
 
         // Cube of `size` eighths starting at eighth (qx, qy, qz) inside the block.
-        // Leaf cells are tested narrower than they are (but full height), so a wall only fattens
-        // by what it really touches: tight spots (the plane's door, the cabin) stay passable.
-        // Full height matters: with shrunken leaves in Y too, a thin, nearly flat floor (the
-        // plane's cabin, a mesh with no thickness) could pass between two layers of tests and
-        // leave a strip of floor missing, through which Minecraft fell.
+        // Leaf cells are tested at their full size: shrunken leaves left a gap between two tests,
+        // and a rock's collision (a concave mesh: only its surface, no inside) standing about
+        // upright in such a gap was missed all the way up, a slit Minecraft walked through
+        // (into the rock, then pushed out on top of it). Full height too: a thin, nearly flat
+        // floor (the plane's cabin) slipped between two layers the same way.
         static bool Any(int bx, int by, int bz, int qx, int qy, int qz, int size)
         {
             queries++;
@@ -192,7 +196,7 @@ namespace ForestCraft
             float k = Link.Scale;
             // Bigger cubes are only a test for "anything here?": they overlap a hair, so nothing
             // lying exactly on a block boundary is missed.
-            float h = (size == 1 ? s * 0.4f : s * 0.5f + 0.002f) * k;
+            float h = (size == 1 ? s * 0.5f : s * 0.5f + 0.002f) * k;
             float hy = (size == 1 ? s * 0.5f : s * 0.5f + 0.002f) * k;
             Vector3 center = new Vector3(cx * k, cy * k, -cz * k);
             int n = Physics.OverlapBoxNonAlloc(center, new Vector3(h, hy, h), hits, Quaternion.identity, ~0, QueryTriggerInteraction.Ignore);

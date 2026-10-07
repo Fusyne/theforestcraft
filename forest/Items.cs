@@ -100,20 +100,95 @@ namespace ForestCraft
             int s = Marshal.ReadInt32(view, 0x200 + 152);
             if (s == 0 || s == stamp) return;
             stamp = s;
+            Material multiply = Multiply();
+            Shader fade = multiply == null ? Blocks.FadeShader() : null;
             Shader shader = Blocks.CutoutShader();
-            if (shader == null) return;
+            if (multiply == null && fade == null && shader == null) return;
             for (int i = 0; i < 10; i++)
             {
                 stages[i] = Blocks.LoadTexture("crack" + i + ".bin", stages[i]);
                 if (stages[i] == null) continue;
                 stages[i].wrapMode = TextureWrapMode.Repeat;
-                if (mats[i] == null) mats[i] = new Material(shader);
-                mats[i].mainTexture = stages[i];
-                mats[i].color = new Color(0.35f, 0.35f, 0.35f, 1f);
-                if (mats[i].HasProperty("_Cutoff")) mats[i].SetFloat("_Cutoff", 0.1f);
-                mats[i].renderQueue = 2460;
+                if (multiply != null)
+                {
+                    if (mats[i] == null) mats[i] = new Material(multiply);
+                    mats[i].mainTexture = stages[i];
+                }
+                else if (fade != null)
+                {
+                    // No multiply shader in this build: about the same look by blending the
+                    // crack's dark lines over the block in black, fairly strong (Minecraft multiplies
+                    // the block by twice the crack's grey: dark lines darken it, the rest barely).
+                    if (mats[i] == null) mats[i] = new Material(fade);
+                    mats[i].mainTexture = Blended(stages[i]);
+                    mats[i].color = Color.white;
+                }
+                else
+                {
+                    if (mats[i] == null) mats[i] = new Material(shader);
+                    mats[i].mainTexture = stages[i];
+                    mats[i].color = new Color(0.6f, 0.6f, 0.6f, 1f);
+                    if (mats[i].HasProperty("_Cutoff")) mats[i].SetFloat("_Cutoff", 0.1f);
+                    mats[i].renderQueue = 2460;
+                }
             }
             Plugin.Log.LogInfo("ForestCraft: breaking cracks loaded");
+        }
+
+        static Texture2D Blended(Texture2D crack)
+        {
+            Color32[] px = crack.GetPixels32();
+            for (int p = 0; p < px.Length; p++)
+            {
+                Color32 c = px[p];
+                // Only the dark lines, a soft black: the light pixels went bright white in the sun
+                // (this shader is lit), and the dark ones at half were too strong in the shade.
+                if (c.a < 25 || c.r >= 100) px[p] = new Color32(0, 0, 0, 0);
+                else px[p] = new Color32(0, 0, 0, 165);
+            }
+            var t = new Texture2D(crack.width, crack.height, TextureFormat.RGBA32, false);
+            t.filterMode = FilterMode.Point;
+            t.wrapMode = TextureWrapMode.Repeat;
+            t.SetPixels32(px);
+            t.Apply(false);
+            return t;
+        }
+
+        // Minecraft draws the cracks multiplied onto the block (destination x texture x 2): its
+        // grey cracks darken the block's own colours, they aren't painted on as black.
+        static Material multiplyMat;
+        static bool multiplyTried;
+
+        static Material Multiply()
+        {
+            if (multiplyTried) return multiplyMat;
+            multiplyTried = true;
+            const string source =
+                "Shader \"Hidden/ForestCraftCrack\" {" +
+                " Properties { _MainTex (\"Crack\", 2D) = \"white\" {} }" +
+                " SubShader { Tags { \"Queue\"=\"Transparent-20\" \"IgnoreProjector\"=\"True\" \"RenderType\"=\"Transparent\" }" +
+                "  Pass { ZWrite Off Cull Back Lighting Off Fog { Mode Off } Offset -1, -1" +
+                "   AlphaTest Greater 0.1" +
+                "   Blend DstColor SrcColor" +
+                "   SetTexture [_MainTex] { combine texture } } } }";
+            try
+            {
+                var ctor = typeof(Material).GetConstructor(new[] { typeof(string) });
+                if (ctor != null)
+                {
+                    var m = (Material)ctor.Invoke(new object[] { source });
+                    if (m != null && m.shader != null && m.shader.isSupported) multiplyMat = m;
+                }
+            }
+            catch (Exception) { }
+            if (multiplyMat == null)
+            {
+                Shader s = Shader.Find("Particles/Multiply (Double)");
+                if (s == null) s = Shader.Find("Legacy Shaders/Particles/Multiply (Double)");
+                if (s != null) multiplyMat = new Material(s);
+            }
+            Plugin.Log.LogInfo("ForestCraft: cracks drawn " + (multiplyMat != null ? "multiplied onto the blocks, like Minecraft" : "blended (no multiply shader in this build)"));
+            return multiplyMat;
         }
 
         public static void Update(IntPtr view)
@@ -138,7 +213,9 @@ namespace ForestCraft
                     groundKey = Key(x, y, z);
                     groundScale = k;
                 }
-                if (groundMesh != null)
+                // Nothing of the ground's shape in that cell (beside a hole, its faces belong to
+                // the hole's walls): the cube then, like on a block.
+                if (groundMesh != null && groundMesh.vertexCount > 0)
                 {
                     cube.GetComponent<MeshFilter>().sharedMesh = groundMesh;
                     cube.transform.position = Vector3.zero;
@@ -405,6 +482,21 @@ namespace ForestCraft
             // Items in hand use the block/item atlases (same materials as the placed blocks).
             if (material == -1 || material == -2) return Blocks.MaterialFor(((long)(1 | ((material == -2 ? 1 : 0) << 8)) << 32) | color);
             Material m;
+            if (material == -3)
+            {
+                // A burning mob's fire: blocks atlas, unlit (it is the light), no shadow of its own.
+                if (materials.TryGetValue(key, out m) && m != null)
+                {
+                    if (m.mainTexture == null) m.mainTexture = Blocks.Atlas(0);
+                    return m;
+                }
+                Shader unlit = Shader.Find("Unlit/Transparent Cutout");
+                m = new Material(unlit != null ? unlit : Blocks.CutoutShader());
+                m.mainTexture = Blocks.Atlas(0);
+                if (m.HasProperty("_Cutoff")) m.SetFloat("_Cutoff", 0.1f);
+                materials[key] = m;
+                return m;
+            }
             if (materials.TryGetValue(key, out m) && m != null)
             {
                 Texture2D t;
@@ -416,7 +508,7 @@ namespace ForestCraft
             Texture2D tex;
             if (textures.TryGetValue(material, out tex)) m.mainTexture = tex;
             if (m.HasProperty("_Cutoff")) m.SetFloat("_Cutoff", 0.1f);
-            m.color = color == 0xFFFFFFFF ? Color.white : new Color(((color >> 16) & 255) / 255f, ((color >> 8) & 255) / 255f, (color & 255) / 255f, 1f);
+            m.color = Blocks.TintOf(color);
             materials[key] = m;
             return m;
         }

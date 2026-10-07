@@ -24,6 +24,8 @@ namespace ForestCraft
         const int ChunkSize = 16;
 
         static readonly HashSet<long> cells = new HashSet<long>();
+        // Cells Minecraft turned into its own blocks (revealed), as it says (flag -1).
+        static readonly HashSet<long> mcBlocks = new HashSet<long>();
         static readonly Dictionary<long, List<long>> byChunk = new Dictionary<long, List<long>>();
         static readonly HashSet<long> dirty = new HashSet<long>();
         static readonly Dictionary<long, GameObject> built = new Dictionary<long, GameObject>();
@@ -71,8 +73,10 @@ namespace ForestCraft
         public static void ClearAll(IntPtr view)
         {
             cells.Clear();
+            mcBlocks.Clear();
             byChunk.Clear();
             dirty.Clear();
+            settleLater.Clear();
             for (int i = 0; i < pending.Count; i++) if (pending[i].stand != null) UnityEngine.Object.Destroy(pending[i].stand);
             pending.Clear();
             rebuildNow.Clear();
@@ -125,14 +129,21 @@ namespace ForestCraft
             while (applied < written && n < 512)
             {
                 int at = OffDig + 64 + (applied % Ring) * Entry;
-                Add(Marshal.ReadInt32(view, at), Marshal.ReadInt32(view, at + 4), Marshal.ReadInt32(view, at + 8), Marshal.ReadInt32(view, at + 12));
+                int cx = Marshal.ReadInt32(view, at), cy = Marshal.ReadInt32(view, at + 4), cz = Marshal.ReadInt32(view, at + 8), flag = Marshal.ReadInt32(view, at + 12);
+                if (flag == -1) AddBlock(cx, cy, cz);
+                else Add(cx, cy, cz, flag);
                 applied++;
                 n++;
             }
             Marshal.WriteInt32(view, OffDig + 4, applied);
             OpenPending();
             Ground.Flush();
-            if (dirty.Count > 0 && spritesReady) RebuildSome(1);
+            if (settleLater.Count > 0 && Time.realtimeSinceStartup - lastAddAt > 1f)
+            {
+                foreach (long c in settleLater) dirty.Add(c);
+                settleLater.Clear();
+            }
+            if (dirty.Count > 0 && spritesReady) RebuildSome(dirty.Count > 8 ? 3 : 1);
         }
 
         // A cell just dug: the island's ground sinks at once and the walls and cap around it are
@@ -153,10 +164,30 @@ namespace ForestCraft
         static readonly int[] ndx = { 0, 0, -1, 1, 0, 0 }, ndy = { -1, 1, 0, 0, 0, 0 }, ndz = { 0, 0, 0, 0, -1, 1 };
 
         // flag: 0 = an old hole (loading a save), 1 = just dug, nothing revealed, 2+ = just dug, blocks revealed.
+        // Chunks touched by a burst of digging (several explosions at once), built again once it
+        // has settled: built cell by cell as the cells came in, a chunk could keep walls and cap
+        // worked out before its neighbours' cells (or the blocks revealed under them) arrived:
+        // floating faces, and the ground drawn over part of the crater.
+        static readonly HashSet<long> settleLater = new HashSet<long>();
+        static float lastAddAt = -100f;
+
+        static void AddBlock(int x, int y, int z)
+        {
+            if (!mcBlocks.Add(CellKey(x, y, z))) return;
+            lastAddAt = Time.realtimeSinceStartup;
+            for (int cz = (z - Reach) >> 4; cz <= (z + Reach) >> 4; cz++)
+                for (int cx = (x - Reach) >> 4; cx <= (x + Reach) >> 4; cx++)
+                    settleLater.Add(ChunkKey(cx, cz));
+        }
+
         static void Add(int x, int y, int z, int flag)
         {
             long key = CellKey(x, y, z);
             if (!cells.Add(key)) return;
+            lastAddAt = Time.realtimeSinceStartup;
+            for (int cz = (z - Reach) >> 4; cz <= (z + Reach) >> 4; cz++)
+                for (int cx = (x - Reach) >> 4; cx <= (x + Reach) >> 4; cx++)
+                    settleLater.Add(ChunkKey(cx, cz));
             long chunk = ChunkKey(x >> 4, z >> 4);
             List<long> list;
             if (!byChunk.TryGetValue(chunk, out list)) { list = new List<long>(); byChunk[chunk] = list; }
@@ -196,7 +227,7 @@ namespace ForestCraft
             for (int d = 0; d < 6; d++)
             {
                 int nx = x + ndx[d], ny = y + ndy[d], nz = z + ndz[d];
-                if (IsDug(nx, ny, nz) || !Revealed(nx, ny, nz)) continue;
+                if (IsDug(nx, ny, nz) || !Converted(nx, ny, nz)) continue;
                 float[] rect = MaterialOf(nx, ny, nz);
                 for (int f = 0; f < 6; f++)
                 {
@@ -225,7 +256,7 @@ namespace ForestCraft
             var go = new GameObject("ForestCraft stand-in blocks");
             go.AddComponent<MeshFilter>().sharedMesh = mb.ToMesh("stand-in");
             var r = go.AddComponent<MeshRenderer>();
-            r.sharedMaterial = Blocks.MaterialFor(0xFFFFFFFF);
+            r.sharedMaterial = Blocks.WorldMaterialFor(0xFFFFFFFF);
             return go;
         }
 
@@ -399,7 +430,7 @@ namespace ForestCraft
                 w.transform.SetParent(go.transform, false);
                 w.AddComponent<MeshFilter>().sharedMesh = wallMesh;
                 var r = w.AddComponent<MeshRenderer>();
-                r.sharedMaterial = Blocks.MaterialFor(0xFFFFFFFFL);
+                r.sharedMaterial = Blocks.WorldMaterialFor(0xFFFFFFFFL);
                 r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
                 r.receiveShadows = true;
                 any = true;
@@ -420,7 +451,7 @@ namespace ForestCraft
                 if (mats != null) c.layer = g.terrain.gameObject.layer;
                 c.AddComponent<MeshFilter>().sharedMesh = capMesh;
                 var r = c.AddComponent<MeshRenderer>();
-                r.sharedMaterials = mats ?? new[] { Blocks.MaterialFor((uint)grassTint) };
+                r.sharedMaterials = mats ?? new[] { Blocks.WorldMaterialFor((uint)grassTint) };
                 if (mats != null) r.SetPropertyBlock(TerrainBlock(g));
                 // The cap is the island's surface drawn again over the sunk terrain, which still
                 // casts its own shadow: a second caster at the same height only darkened the
@@ -873,11 +904,22 @@ namespace ForestCraft
         // A neighbour cell whose ground is still drawn by The Forest: not dug, not wholly inside.
         static bool Open(int x, int y, int z)
         {
-            return !IsDug(x, y, z) && !Revealed(x, y, z);
+            return !IsDug(x, y, z) && !Converted(x, y, z);
         }
 
         // Wholly under the original surface: Minecraft turns such a cell into a block when a dug
         // cell next to it opens it up (same rule and same numbers as TerrainDig.java).
+        // Turned into a real Minecraft block, as Minecraft says (TerrainDig.reveal, flag -1). Its
+        // faces are Minecraft's then: drawing The Forest's half-block faces there too made the two
+        // fight (flickering, diagonal seams); guessing which ones it turned left holes.
+        static bool Converted(int x, int y, int z)
+        {
+            // Only what Minecraft says it turned (it sends each one, before the dug cell that
+            // opened it): a cell it didn't (out of its reach, its numbers rounded otherwise)
+            // keeps The Forest's own face, rather than leaving a hole with no floor or wall.
+            return mcBlocks.Contains(CellKey(x, y, z));
+        }
+
         public static bool Revealed(int x, int y, int z)
         {
             float min = MinOf(x, z);

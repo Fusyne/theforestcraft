@@ -58,6 +58,12 @@ public final class TerrainDig {
 		return !Double.isNaN(min) && y + 1 <= min - 0.02;
 	}
 
+	/** Below a dug cell: ground if The Forest's (sunk) surface reaches this cell's top. */
+	private static boolean underSunkGround(int x, int y, int z) {
+		double min = ForestLink.minHeight(x, z);
+		return !Double.isNaN(min) && y + 1 <= min + 0.15;
+	}
+
 	/** Deep enough for stone (same rule as DigWorld.MaterialOf in The Forest). */
 	private static boolean deep(int x, int y, int z) {
 		double hc = ForestLink.heightAt(x, z);
@@ -147,17 +153,62 @@ public final class TerrainDig {
 		ensureLoaded(server);
 		var player = server.getPlayerList().getPlayer(id);
 		if (player == null) return;
-		ServerLevel level = player.level();
+		digCell(player.level(), cell, player, harvest, 0f);
+	}
+
+	/**
+	 * An explosion (TNT, creeper) on the island: a small crater in The Forest's ground, ragged at
+	 * the edge, some of it thrown out as items like Minecraft's own blasts. Called after the
+	 * explosion, so the blocks it reveals around the crater stay.
+	 */
+	public static void blast(ServerLevel level, net.minecraft.world.phys.Vec3 center, float radius) {
+		if (ForestLink.buffer() == null || center == null || radius <= 0f) return;
+		ensureLoaded(level.getServer());
+		double rc = Math.max(1.0, Math.min(2.3, radius * 0.5));
+		int r = (int) Math.ceil(rc);
+		int cx = net.minecraft.util.Mth.floor(center.x), cy = net.minecraft.util.Mth.floor(center.y), cz = net.minecraft.util.Mth.floor(center.z);
+		int done = 0;
+		for (int dy = r; dy >= -r; dy--)
+			for (int dx = -r; dx <= r; dx++)
+				for (int dz = -r; dz <= r; dz++) {
+					int x = cx + dx, y = cy + dy, z = cz + dz;
+					double ex = x + 0.5 - center.x, ey = y + 0.5 - center.y, ez = z + 0.5 - center.z;
+					double d = Math.sqrt(ex * ex + ey * ey * 1.6 + ez * ez); // a bowl: shallower than wide
+					if (d > rc) continue;
+					if (d > rc - 0.7 && level.getRandom().nextFloat() < 0.4f) continue; // ragged edge
+					double top = ForestLink.maxHeight(x, z);
+					if (Double.isNaN(top) || y >= top) continue; // no ground in this cell
+					BlockPos cell = new BlockPos(x, y, z);
+					if (converted.contains(cell.asLong()) || !level.getBlockState(cell).isAir()) continue;
+					digCell(level, cell, null, false, radius);
+					if (++done >= 28) return;
+					// Nothing of the ground left hanging over the crater: a cell kept by the ragged
+					// edge or the bowl's shape, with the ground under it blown away, was a thin roof
+					// of earth floating over the hole. Up to the surface, the column goes too.
+					for (int up = y + 1; up < top && up <= y + 3; up++) {
+						BlockPos over = new BlockPos(x, up, z);
+						if (converted.contains(over.asLong()) || !level.getBlockState(over).isAir()) break;
+						digCell(level, over, null, false, radius);
+						done++;
+					}
+				}
+		if (done > 0) ForestLink.LOG.info("explosion dug {} cells of The Forest's ground", done);
+	}
+
+	private static void digCell(ServerLevel level, BlockPos cell, net.minecraft.server.level.ServerPlayer player, boolean harvest, float blast) {
 		if (!level.getBlockState(cell).isAir()) return;
 		long key = cell.asLong();
 		if (!converted.add(key)) return;
 		BlockState was = groundBlock(cell.getX(), cell.getY(), cell.getZ());
-		level.levelEvent(player, 2001, cell, net.minecraft.world.level.block.Block.getId(was)); // particles + sound for the others
+		if (player != null) level.levelEvent(player, 2001, cell, net.minecraft.world.level.block.Block.getId(was)); // particles + sound for the others
+		else if (level.getRandom().nextFloat() < 0.5f) level.levelEvent(2001, cell, net.minecraft.world.level.block.Block.getId(was)); // debris of the blast
 		level.getPathTypeCache().invalidate(cell); // mobs: no ground here any more
-		if (harvest) {
+		if (harvest && player != null) {
 			ItemStack drop = dropOf(was);
 			if (!player.getInventory().add(drop)) player.drop(drop, false);
 		}
+		if (blast > 0f && level.getRandom().nextFloat() < 1f / blast)
+			net.minecraft.world.level.block.Block.popResource(level, cell, dropOf(was)); // like a blast's drops: some of it
 		int revealed = reveal(level, cell);
 		// The Forest sinks its ground there once these blocks have reached it (no see-through).
 		fresh.put(key, 1 + revealed);
@@ -193,9 +244,19 @@ public final class TerrainDig {
 		for (net.minecraft.core.Direction d : net.minecraft.core.Direction.values()) {
 			BlockPos n = cell.relative(d);
 			long key = n.asLong();
-			if (converted.contains(key) || !whollyInside(n.getX(), n.getY(), n.getZ())) continue;
+			if (converted.contains(key)) continue;
+			// Under an opened cell, The Forest has already sunk its ground to that cell's floor,
+			// which is exactly the top of this one: "wholly inside" by its strict margin failed
+			// there and holes (an explosion's crater above all) were left with no bottom.
+			boolean inside = d == net.minecraft.core.Direction.DOWN
+				? underSunkGround(n.getX(), n.getY(), n.getZ())
+				: whollyInside(n.getX(), n.getY(), n.getZ());
+			if (!inside) continue;
 			converted.add(key);
 			save("r", n);
+			// The Forest is told too: that cell's faces are Minecraft's from now on (its own
+			// guess at which cells Minecraft turned into blocks missed some, and drew others twice).
+			toForest.add(key);
 			if (!level.getBlockState(n).isAir()) continue; // something is already there
 			BlockState state = groundBlock(n.getX(), n.getY(), n.getZ());
 			level.setBlock(n, state, 2 | 16);
@@ -255,7 +316,7 @@ public final class TerrainDig {
 			ForestLink.LOG.warn("dug ground not loaded: {}", e.toString());
 		}
 		toForest.clear();
-		toForest.addAll(dug);
+		toForest.addAll(converted);
 		ForestLink.LOG.info("dug ground: {} cells converted, {} dug", converted.size(), dug.size());
 	}
 
@@ -307,7 +368,7 @@ public final class TerrainDig {
 		if (cur != written) {
 			written = cur;
 			toForest.clear();
-			toForest.addAll(dug);
+			toForest.addAll(converted);
 		}
 		int applied = map.getInt(OFF_DIG + 4);
 		if (applied > written) applied = written;
@@ -318,8 +379,12 @@ public final class TerrainDig {
 			map.putInt(at, cell.getX());
 			map.putInt(at + 4, cell.getY());
 			map.putInt(at + 8, cell.getZ());
-			Integer flag = fresh.remove(key);
-			map.putInt(at + 12, flag == null ? 0 : flag);
+			// Flag: -1 = turned into a Minecraft block (revealed), else dug (0 = an old hole,
+			// 1 + blocks revealed around it = just dug).
+			if (dug.contains(key)) {
+				Integer flag = fresh.remove(key);
+				map.putInt(at + 12, flag == null ? 0 : flag);
+			} else map.putInt(at + 12, -1);
 			written++;
 			map.putInt(OFF_DIG, written);
 		}

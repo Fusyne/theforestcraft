@@ -8,7 +8,7 @@ namespace ForestCraft
     // Ring at 0xA18000: written count, then 64 entries of (kind, x, y, z) in Minecraft units.
     static class ForestEvents
     {
-        public const int TreeHit = 1, TreeFelled = 2, Flesh = 3, Plant = 4, Rock = 5, Metal = 6, ArrowFlesh = 7;
+        public const int TreeHit = 1, TreeFelled = 2, Flesh = 3, Plant = 4, Rock = 5, Metal = 6, ArrowFlesh = 7, Crit = 8;
         const int Off = 0xA18000;
         const int Ring = 64;
         static int written = -1;

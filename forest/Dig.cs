@@ -44,14 +44,20 @@ namespace ForestCraft
             if (now < nextHit) return;
             nextHit = now + 0.2f;
             if (tree.Health <= 0) return;
+            // A standing tree's first chops only swap it for its notched version (SpawnedCutTree,
+            // DoSpawnCutTree): it falls, and gives its logs, when that one runs out of health.
+            bool falls = tree.SpawnedCutTree && tree.Health <= 1;
             tree.DamageTree();
-            ForestEvents.Emit(tree.Health <= 0 ? ForestEvents.TreeFelled : ForestEvents.TreeHit, aimPoint);
+            ForestEvents.Emit(falls ? ForestEvents.TreeFelled : ForestEvents.TreeHit, aimPoint);
             if (tree.Health <= 0)
             {
-                logSeq++;
-                Link.WriteLogs(logSeq, 4);
+                if (falls)
+                {
+                    logSeq++;
+                    Link.WriteLogs(logSeq, 4);
+                }
                 Solids.ForgetAll();
-                Plugin.Log.LogInfo("ForestCraft: tree felled: " + tree.name + ", spawned cut tree " + tree.SpawnedCutTree);
+                Plugin.Log.LogInfo("ForestCraft: " + (falls ? "tree felled: " : "tree notched: ") + tree.name);
                 target = null;
             }
         }

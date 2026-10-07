@@ -35,11 +35,28 @@ public abstract class MinecraftMixin {
 		ForestLink.paceToForest();
 	}
 
+	private long forestcraft$tickStart, forestcraft$renderStart;
+
+	@Inject(method = "tick", at = @At("RETURN"))
+	private void forestcraft$tickEnd(CallbackInfo ci) {
+		if (forestcraft$tickStart != 0) dev.forestcraft.McPerf.add(dev.forestcraft.McPerf.TICK, forestcraft$tickStart);
+		forestcraft$tickStart = 0;
+	}
+
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void forestcraft$tick(CallbackInfo ci) {
+		forestcraft$tickStart = System.nanoTime();
 		Minecraft minecraft = (Minecraft) (Object) this;
 		dev.forestcraft.ForestEvents.poll(minecraft);
+		ForestLink.perfLog(minecraft);
 		minecraft.options.pauseOnLostFocus = false;
+		// Minecraft's pause menu (Esc or a lost focus while its window was still showing): the
+		// integrated server stops ticking behind it, so the body was never handed over and the
+		// player had no character at all. The Forest has its own pause menu: close Minecraft's.
+		if (minecraft.gui.screen() instanceof net.minecraft.client.gui.screens.PauseScreen && ForestLink.forestPlaying()) {
+			minecraft.gui.setScreen(null);
+			ForestLink.LOG.info("Minecraft's pause menu closed: The Forest has the controls");
+		}
 		// E is The Forest's interact key; Minecraft's inventory is I (also closes it from inside).
 		var inventoryKey = com.mojang.blaze3d.platform.InputConstants.Type.KEYSYM.getOrCreate(org.lwjgl.glfw.GLFW.GLFW_KEY_I);
 		if (!minecraft.options.keyInventory.matches(inventoryKey)) {
@@ -70,8 +87,10 @@ public abstract class MinecraftMixin {
 			return;
 		}
 		forestcraft$view(minecraft);
+		long forestcraft$b = System.nanoTime();
 		dev.forestcraft.BlockExport.tick(minecraft);
 		dev.forestcraft.TerrainDig.pump();
+		dev.forestcraft.McPerf.add(dev.forestcraft.McPerf.BLOCKS, forestcraft$b);
 		if (!forestcraft$hidden) {
 			GLFW.glfwHideWindow(minecraft.getWindow().handle());
 			forestcraft$hidden = true;
@@ -88,6 +107,8 @@ public abstract class MinecraftMixin {
 		forestcraft$forestAim(minecraft, attack);
 		forestcraft$combat(minecraft);
 		forestcraft$heldLight(minecraft);
+		dev.forestcraft.Hazards.tick(minecraft);
+		dev.forestcraft.Fighters.tick(minecraft);
 		dev.forestcraft.TerrainDig.collectLogs(minecraft);
 		dev.forestcraft.TerrainDig.collectGifts(minecraft);
 		forestcraft$attack = attack;
@@ -266,6 +287,7 @@ public abstract class MinecraftMixin {
 
 	@Inject(method = "renderFrame", at = @At("HEAD"))
 	private void forestcraft$look(boolean advanceGameTime, CallbackInfo ci) {
+		forestcraft$renderStart = System.nanoTime();
 		Minecraft minecraft = (Minecraft) (Object) this;
 		ForestLink.ForestSnapshot forest = ForestLink.readForest();
 		if (minecraft.player == null || forest == null || forest.teleportSeq() == 0) return;
@@ -276,8 +298,33 @@ public abstract class MinecraftMixin {
 		ForestLink.frameBob = 0f;
 	}
 
+	private long forestcraft$part;
+
+	@Inject(method = "renderFrame", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;render(Lnet/minecraft/client/DeltaTracker;Z)V"))
+	private void forestcraft$drawStart(boolean advanceGameTime, CallbackInfo ci) {
+		if (forestcraft$renderStart != 0) dev.forestcraft.McPerf.add(dev.forestcraft.McPerf.EXTRACT, forestcraft$renderStart);
+		forestcraft$part = System.nanoTime();
+	}
+
+	@Inject(method = "renderFrame", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;render(Lnet/minecraft/client/DeltaTracker;Z)V", shift = At.Shift.AFTER))
+	private void forestcraft$drawEnd(boolean advanceGameTime, CallbackInfo ci) {
+		dev.forestcraft.McPerf.add(dev.forestcraft.McPerf.DRAW, forestcraft$part);
+	}
+
+	@Inject(method = "renderFrame", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/systems/GpuSurface;present()V"))
+	private void forestcraft$presentStart(boolean advanceGameTime, CallbackInfo ci) {
+		forestcraft$part = System.nanoTime();
+	}
+
+	@Inject(method = "renderFrame", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/systems/GpuSurface;present()V", shift = At.Shift.AFTER))
+	private void forestcraft$presentEnd(boolean advanceGameTime, CallbackInfo ci) {
+		dev.forestcraft.McPerf.add(dev.forestcraft.McPerf.PRESENT, forestcraft$part);
+	}
+
 	@Inject(method = "renderFrame", at = @At("TAIL"))
 	private void forestcraft$frame(boolean advanceGameTime, CallbackInfo ci) {
+		if (forestcraft$renderStart != 0) dev.forestcraft.McPerf.add(dev.forestcraft.McPerf.RENDER, forestcraft$renderStart);
+		long forestcraft$e = System.nanoTime();
 		Minecraft minecraft = (Minecraft) (Object) this;
 		if (minecraft.player != null) {
 			ForestLink.publishView(minecraft.player.getEyeHeight(), minecraft.gameRenderer.mainCamera().getFov(),
@@ -288,7 +335,10 @@ public abstract class MinecraftMixin {
 			dev.forestcraft.EntityExport.publish();
 			dev.forestcraft.ParticleExport.publish();
 		}
+		dev.forestcraft.McPerf.add(dev.forestcraft.McPerf.EXPORT, forestcraft$e);
+		long forestcraft$c = System.nanoTime();
 		FrameCapture.capture(minecraft);
+		dev.forestcraft.McPerf.add(dev.forestcraft.McPerf.CAPTURE, forestcraft$c);
 	}
 
 	@Inject(method = "setScreenAndShow", at = @At("TAIL"))

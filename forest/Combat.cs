@@ -23,8 +23,9 @@ namespace ForestCraft
 
         public static void Update(int input)
         {
-            if (!Link.Driving) { wasAttack = false; return; }
+            if (!Link.Driving) { wasAttack = false; feetKnown = false; return; }
             KeepStatsFull();
+            TrackFall();
             bool attack = (input & 128) != 0;
             if (attack && !wasAttack) Strike();
             wasAttack = attack;
@@ -80,6 +81,36 @@ namespace ForestCraft
         static Collider LastHit;
         static Vector3 LastPoint;
 
+        static Vector3 StopPoint; // where FindTarget's line ended (on what stopped it)
+
+        // Something that takes hits close to where the swing landed: a bird pecking on the ground,
+        // a rabbit, a carcass lying there. Aimed at, the line hits the ground at their feet.
+        static readonly Collider[] around = new Collider[48];
+        static bool FindAround(Vector3 at, float radius, out EnemyHealth enemy, out Collider other, out Vector3 otherPoint)
+        {
+            enemy = null; other = null; otherPoint = at;
+            Transform player = LocalPlayer.Transform;
+            int n = Physics.OverlapSphereNonAlloc(at, radius, around, ~0, QueryTriggerInteraction.Collide);
+            float best = float.MaxValue;
+            for (int i = 0; i < n; i++)
+            {
+                Collider c = around[i];
+                if (c == null || (player != null && c.transform.IsChildOf(player)) || Blocks.IsOurs(c.transform)) continue;
+                bool creature = c.CompareTag("lb_bird") || c.CompareTag("animalCollide") || c.CompareTag("Fish") || c.CompareTag("corpseProp")
+                    || c.CompareTag("hanging") || c.CompareTag("enemyCollide") || c.CompareTag("EnemyBodyPart");
+                EnemyHealth eh = creature ? null : c.GetComponentInParent<EnemyHealth>();
+                if (!creature && eh == null) continue;
+                Vector3 p = c.ClosestPointOnBounds(at);
+                float d = (p - at).sqrMagnitude;
+                if (d >= best) continue;
+                if (eh == null) eh = c.GetComponentInParent<EnemyHealth>();
+                if (eh != null) { best = d; enemy = eh; other = null; LastHit = c; LastPoint = p; continue; }
+                if (Receiver(c, p) == null) continue;
+                best = d; enemy = null; other = c; otherPoint = p; LastHit = c; LastPoint = p;
+            }
+            return enemy != null || other != null;
+        }
+
         static bool FindTarget(Vector3 from, Vector3 dir, float reach, float radius, out EnemyHealth enemy, out Collider other, out Vector3 otherPoint)
         {
             Transform player = LocalPlayer.Transform;
@@ -91,6 +122,7 @@ namespace ForestCraft
             otherPoint = Vector3.zero;
             float best = float.MaxValue;
             LastHit = null;
+            StopPoint = from + dir * reach;
             for (int i = 0; i < n; i++)
             {
                 Collider c = hits[i].collider;
@@ -103,10 +135,44 @@ namespace ForestCraft
                 if (eh == null && c.transform.root != null) eh = c.transform.root.GetComponentInChildren<EnemyHealth>();
                 if (eh != null) { best = hits[i].distance; enemy = eh; other = null; LastHit = c; LastPoint = hits[i].point; continue; }
                 if (Receiver(c, hits[i].point) != null) { best = hits[i].distance; enemy = null; other = c; otherPoint = hits[i].point; LastHit = c; LastPoint = hits[i].point; continue; }
-                // Something solid in front (tree trunk, wall) stops the swing.
-                if (!c.isTrigger) { best = hits[i].distance; enemy = null; other = null; LastHit = null; }
+                // Something solid in front (tree trunk, wall) stops the swing. Not the ground for the
+                // fat sphere: skimming the ground, it met it before a bird or a rabbit sitting on it.
+                if (!c.isTrigger && !(radius > 0f && c is TerrainCollider))
+                {
+                    best = hits[i].distance; enemy = null; other = null; LastHit = null;
+                    StopPoint = radius > 0f ? from + dir * hits[i].distance : hits[i].point;
+                }
             }
             return enemy != null || other != null;
+        }
+
+        /// <summary>The creature (enemy, or animal/bird/fish/carcass collider) under the crosshair, as a swing finds it.</summary>
+        public static bool Aim(out EnemyHealth enemy, out Collider other, out Vector3 point, out Collider part)
+        {
+            enemy = null; other = null; point = Vector3.zero; part = null;
+            Camera cam = LocalPlayerSafe.Camera();
+            if (cam == null) return false;
+            float reach = 3.2f * Link.Scale;
+            if (!FindTarget(cam.transform.position, cam.transform.forward, reach, 0f, out enemy, out other, out point))
+            {
+                Vector3 landed = StopPoint;
+                bool reached = (landed - cam.transform.position).sqrMagnitude < reach * reach * 0.999f;
+                if (!FindTarget(cam.transform.position, cam.transform.forward, reach, 0.3f * Link.Scale, out enemy, out other, out point)
+                    && !(reached && FindAround(landed, 0.5f * Link.Scale, out enemy, out other, out point)))
+                    return false;
+            }
+            part = LastHit;
+            if (enemy != null) point = LastHit != null ? LastPoint : enemy.transform.position + Vector3.up * Link.Scale;
+            return true;
+        }
+
+        /// <summary>Damage to a cannibal from Minecraft (fire, lava...), told as the player's.</summary>
+        public static void HurtEnemy(EnemyHealth enemy, int damage)
+        {
+            if (enemy == null || enemy.Health <= 0) return;
+            if (enemy.targetSwitcher != null) enemy.targetSwitcher.attackerType = 4;
+            enemy.getCombo(1);
+            enemy.Hit(damage);
         }
 
         static void Strike()
@@ -118,16 +184,27 @@ namespace ForestCraft
             Collider other;
             Vector3 otherPoint;
             // The exact line first; then a fatter one, so a rabbit or a leg isn't missed by a hair.
-            if (!FindTarget(cam.transform.position, cam.transform.forward, reach, 0f, out enemy, out other, out otherPoint)
-                && !FindTarget(cam.transform.position, cam.transform.forward, reach, 0.3f * Link.Scale, out enemy, out other, out otherPoint))
-                return;
+            // The exact line first; then a fatter one; then what sits where the line hit (the ground
+            // under a bird, a rabbit).
+            if (!FindTarget(cam.transform.position, cam.transform.forward, reach, 0f, out enemy, out other, out otherPoint))
+            {
+                Vector3 landed = StopPoint;
+                bool reached = (landed - cam.transform.position).sqrMagnitude < reach * reach * 0.999f;
+                if (!FindTarget(cam.transform.position, cam.transform.forward, reach, 0.3f * Link.Scale, out enemy, out other, out otherPoint)
+                    && !(reached && FindAround(landed, 0.5f * Link.Scale, out enemy, out other, out otherPoint)))
+                    return;
+            }
             // Minecraft's own numbers: attack damage of the held item and the cooldown bar.
             float damage = Link.ReadMcFloat(168);
             float strength = Mathf.Clamp01(Link.ReadMcFloat(172));
             if (damage <= 0f) damage = 1f;
             damage *= 0.2f + strength * strength * 0.8f;
+            // Minecraft's critical hit: a fully charged blow while coming down from a jump.
+            heavyStrike = strength >= 0.9f && fallSpeed > 0.5f * Link.Scale;
+            if (heavyStrike) damage *= 1.5f;
             int forestDamage = Mathf.Max(1, Mathf.RoundToInt(damage * DamageToForest));
             Apply(enemy, other, otherPoint, forestDamage, "hit");
+            heavyStrike = false;
         }
 
         static void Apply(EnemyHealth enemy, Collider other, Vector3 otherPoint, int forestDamage, string what)
@@ -136,9 +213,10 @@ namespace ForestCraft
             if (enemy != null)
             {
                 if (enemy.Health <= 0) return;
-                enemy.Hit(forestDamage);
-                ForestEvents.Emit(arrow ? ForestEvents.ArrowFlesh : ForestEvents.Flesh, LastHit != null ? LastPoint : enemy.transform.position + Vector3.up * Link.Scale);
-                Plugin.Log.LogInfo("ForestCraft: " + what + " " + enemy.gameObject.name + " for " + forestDamage + " (health " + enemy.Health + ")");
+                Vector3 at = LastHit != null ? LastPoint : enemy.transform.position + Vector3.up * Link.Scale;
+                string how = HitEnemy(enemy, LastHit, at, forestDamage, arrow, heavyStrike);
+                ForestEvents.Emit(heavyStrike ? ForestEvents.Crit : arrow ? ForestEvents.ArrowFlesh : ForestEvents.Flesh, at);
+                Plugin.Log.LogInfo("ForestCraft: " + what + " " + enemy.gameObject.name + " for " + forestDamage + how + " (health " + enemy.Health + ")");
                 return;
             }
             // Same message The Forest's weapon sends, to the object that actually listens for it.
@@ -160,6 +238,116 @@ namespace ForestCraft
             else if (other.CompareTag("BreakableWood")) kind = ForestEvents.TreeHit;
             ForestEvents.Emit(kind, otherPoint);
             Plugin.Log.LogInfo("ForestCraft: " + what + " " + other.tag + " " + target.name + " for " + forestDamage);
+        }
+
+        // ---- hitting The Forest's natives the way its own weapons do ------------------------------
+        // EnemyHealth.Hit alone took the health away but, for the plain cannibals, nothing else:
+        // without knowing the player hit them (attacker type 4), from which side and in which
+        // swing, they neither staggered nor bled. weaponInfo tells the body part hit
+        // (mutantHitReceiver) all of it first; so do we: from behind or in front, the swing's side
+        // (left/right, a stab for arrows), the combo of quick blows, a sneak attack on one who
+        // hasn't seen us (The Forest kills on the spot), and a critical blow that can knock down.
+        static bool heavyStrike;
+        static int combo, swingSide;
+        static float lastEnemyHit = -10f;
+        static float lastFeetY, fallSpeed;
+        static bool feetKnown;
+        static string fleshEvent;
+        static float fleshSearchAt;
+
+        static void TrackFall()
+        {
+            float y = Drive.LastFeet.y;
+            float dt = Time.deltaTime;
+            if (feetKnown && dt > 0f) fallSpeed = (lastFeetY - y) / dt;
+            lastFeetY = y;
+            feetKnown = true;
+        }
+
+        static string HitEnemy(EnemyHealth enemy, Collider part, Vector3 at, int damage, bool arrow, bool heavy)
+        {
+            var opt = SendMessageOptions.DontRequireReceiver;
+            mutantHitReceiver receiver = null;
+            if (part != null)
+            {
+                receiver = part.GetComponent<mutantHitReceiver>();
+                if (receiver == null) receiver = part.GetComponentInParent<mutantHitReceiver>();
+            }
+            GameObject target = receiver != null ? receiver.gameObject : part != null ? part.gameObject : enemy.gameObject;
+            GameObject player = LocalPlayer.GameObject;
+            target.SendMessage("getAttackerType", 4, opt);
+            if (player != null) target.SendMessage("getAttacker", player, opt);
+            if (enemy.targetSwitcher != null) enemy.targetSwitcher.attackerType = 4;
+
+            bool behind = false;
+            Transform root = enemy.transform.root;
+            Transform body = root.childCount > 0 ? root.GetChild(0) : root;
+            if (LocalPlayer.Transform != null)
+            {
+                Vector3 l = body.InverseTransformPoint(LocalPlayer.Transform.position);
+                float angle = Mathf.Atan2(l.x, l.z) * Mathf.Rad2Deg;
+                behind = angle < -140f || angle > 140f;
+            }
+            float now = Time.time;
+            combo = now - lastEnemyHit < 1.5f ? Mathf.Min(3, combo + 1) : 1;
+            lastEnemyHit = now;
+            if (heavy) combo = 3;
+            swingSide ^= 1;
+            int dir = arrow ? 3 : swingSide;
+            int takeDir = behind ? 1 : 0;
+            if (receiver != null)
+            {
+                receiver.takeDamage(takeDir);
+                receiver.getAttackDirection(dir);
+                if (!arrow) receiver.getStealthAttack();
+                receiver.getCombo(combo);
+                if (heavy) receiver.sendHitFallDown(damage);
+                else receiver.hitRelay(damage);
+            }
+            else
+            {
+                enemy.takeDamage(takeDir);
+                enemy.getAttackDirection(dir);
+                if (!arrow) enemy.getStealthAttack();
+                enemy.getCombo(combo);
+                if (heavy) enemy.hitFallDown(damage);
+                else enemy.Hit(damage);
+            }
+            PlayFlesh(at);
+            return (behind ? ", from behind" : "") + (heavy ? ", critical" : "") + ", combo " + combo + (receiver == null ? ", no hit receiver" : "");
+        }
+
+        // The Forest's own blow-in-flesh sound, taken from the player's weapons.
+        static void PlayFlesh(Vector3 at)
+        {
+            if (fleshEvent == null && Time.realtimeSinceStartup >= fleshSearchAt)
+            {
+                fleshSearchAt = Time.realtimeSinceStartup + 30f;
+                try
+                {
+                    GameObject player = LocalPlayer.GameObject;
+                    if (player != null)
+                    {
+                        // weaponInfo derives from a Bolt type: read it by name, no extra reference.
+                        foreach (MonoBehaviour w in player.GetComponentsInChildren<MonoBehaviour>(true))
+                        {
+                            if (w == null || w.GetType().Name != "weaponInfo") continue;
+                            var t = w.GetType();
+                            var current = t.GetField("currentWeaponScript");
+                            var flesh = t.GetField("fleshHitEvent");
+                            if (flesh == null) continue;
+                            object cur = current != null ? current.GetValue(w) : null;
+                            string e = cur != null ? flesh.GetValue(cur) as string : null;
+                            if (string.IsNullOrEmpty(e)) e = flesh.GetValue(w) as string;
+                            if (!string.IsNullOrEmpty(e)) { fleshEvent = e; break; }
+                        }
+                    }
+                    Plugin.Log.LogInfo("ForestCraft: flesh hit sound " + (fleshEvent ?? "not found"));
+                }
+                catch (Exception e) { Plugin.Log.LogWarning("ForestCraft: flesh hit sound: " + e.Message); }
+            }
+            if (fleshEvent == null) return;
+            try { FMODCommon.PlayOneshot(fleshEvent, at); } catch { }
         }
 
         // ---- Minecraft's arrows (Shots on the Minecraft side) -----------------------------------

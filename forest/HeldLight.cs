@@ -7,6 +7,7 @@ namespace ForestCraft
     static class HeldLight
     {
         static Light light;
+        public static bool On { get { return light != null && light.enabled; } }
 
         public static void Update(bool thirdPerson, Vector3 feet)
         {

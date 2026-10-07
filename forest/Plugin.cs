@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace ForestCraft
 {
-    [BepInPlugin("dev.forestcraft", "ForestCraft", "0.3.0")]
+    [BepInPlugin("dev.forestcraft", "ForestCraft", "0.4.0")]
     public class Plugin : BaseUnityPlugin
     {
         public static ManualLogSource Log;
@@ -21,6 +21,9 @@ namespace ForestCraft
         BepInEx.Configuration.ConfigEntry<float> sensitivity;
         BepInEx.Configuration.ConfigEntry<bool> invertY;
         BepInEx.Configuration.ConfigEntry<float> worldScale;
+        BepInEx.Configuration.ConfigEntry<bool> devConsole;
+        BepInEx.Configuration.ConfigEntry<bool> modMenu;
+        public static BepInEx.Configuration.ConfigEntry<int> MaxFps;
         BepInEx.Configuration.ConfigEntry<float> cursorSpeed;
         BepInEx.Configuration.ConfigEntry<string> digCap;
         public static float CursorSpeed = 10f;
@@ -38,6 +41,9 @@ namespace ForestCraft
             cursorSpeed = Config.Bind("Controls", "CursorSpeed", 10f, "Speed of the cursor in Minecraft's inventory and chat (pixels per unit of mouse axis at 1080p).");
             CursorSpeed = cursorSpeed.Value;
             worldScale = Config.Bind("World", "Scale", 0f, "Forest units per Minecraft block (how big Steve and the blocks are). 0 = auto (The Forest eye height / Steve's 1.62, at most 1.8). Only used for new Minecraft worlds: each world keeps the size it was made with.");
+            devConsole = Config.Bind("Debug", "DeveloperConsole", true, "The Forest's developer console on F1 (spawnmutant, spawnitem, godmode, goto...); 'mc <command>' in it runs a Minecraft command.");
+            MaxFps = Config.Bind("Performance", "MaxFps", 120, "Cap on The Forest's frame rate (0 = no cap; 120 by default). Minecraft shares the graphics card: a Forest running flat out leaves it too little, and the hand/HUD stutter. Also in the F8 menu.");
+            modMenu = Config.Bind("Debug", "ModMenu", true, "Clickable test menu on F8: spawn cannibals, animals and Minecraft mobs, give items, god mode, weather...");
             digCap = Config.Bind("World", "DugGroundLook", "Terrain", "How the ground around holes is drawn: Terrain (The Forest's own ground material) or Grass (Minecraft grass).");
             DigWorld.CapMode = digCap.Value == "Grass" ? "Grass" : "Terrain";
             if (!Link.Create())
@@ -57,15 +63,46 @@ namespace ForestCraft
             finally { Perf.EndOfOurs(); }
         }
 
+        float hopLoggedAt;
+
         void LateUpdateInner()
         {
+            DevConsole.Enabled = devConsole.Value;
+            ModMenu.Enabled = modMenu.Value;
+            DevConsole.Ensure();
+            DevConsole.Flush();
+            ApplyFpsCap();
+            StandUpFast.Update();
             if (!Link.Create()) return;
+            // The Forest moved its player far by itself while Minecraft had the body (console goto,
+            // the mod menu's trips): send Minecraft there too, the same way the body is first handed
+            // over. A short hop is a cave door (CaveTriggers.CaveDoorRoutine puts the player a few
+            // units across the doorway after a fade): Minecraft walks through that doorway itself,
+            // and handing the body back and forth there threw the player out of the cave again.
+            if (Drive.HasLastRoot && !Link.ForestMoved)
+            {
+                Transform root = TheForest.Utils.LocalPlayer.Transform;
+                float hop = root != null ? (root.position - Drive.LastRootSet).magnitude : 0f;
+                if (hop > 2f && hop <= 12f && Time.realtimeSinceStartup >= hopLoggedAt)
+                {
+                    hopLoggedAt = Time.realtimeSinceStartup + 2f;
+                    Log.LogInfo("ForestCraft: The Forest moved the player " + hop.ToString("0.0") + " units (a cave door): Minecraft keeps the body");
+                }
+                if (root != null && hop > 12f)
+                {
+                    Link.ForestMoved = true;
+                    Drive.HasLastRoot = false;
+                    waitLogged = false;
+                    Log.LogInfo("ForestCraft: The Forest moved the player " + (root.position - Drive.LastRootSet).magnitude.ToString("0.0") + " units: Minecraft follows");
+                }
+            }
             { double pq = Perf.Now(); Session.Update(Link.View); Perf.Add("session", pq); }
             if (Session.JustStarted)
             {
                 // Another game (new or loaded): Minecraft opens its own world for it and hands
                 // the body over again; nothing of the previous game's blocks or holes stays.
                 teleportSeq = 0;
+                Link.ForestMoved = false;
                 waitLogged = false;
                 Blocks.ClearAll();
                 DigWorld.ClearAll(Link.View);
@@ -87,14 +124,15 @@ namespace ForestCraft
             // Hand Minecraft the beach, not the plane. A new seq is the only time it may move us.
             // Only the end of a cutscene (or the first arrival) counts: closing the pause menu
             // or the inventory used to bump the seq and yank the body back to The Forest.
-            if (inWorld && !scripted && (wasScripted || teleportSeq == 0) && !Solids.NearReady)
+            if (inWorld && !scripted && (wasScripted || teleportSeq == 0 || Link.ForestMoved) && !Solids.NearReady)
             {
                 // Scan The Forest's colliders around the feet first (see Solids.NearReady).
                 Solids.Step(x, y, z);
                 if (!waitLogged) { waitLogged = true; Log.LogInfo("ForestCraft: waiting for the collisions around the player"); }
             }
-            if (inWorld && !scripted && (wasScripted || teleportSeq == 0) && Solids.NearReady)
+            if (inWorld && !scripted && (wasScripted || teleportSeq == 0 || Link.ForestMoved) && Solids.NearReady && StandUpFast.Ready)
             {
+                Link.ForestMoved = false;
                 teleportSeq++;
                 if (teleportSeq == 0) teleportSeq = 1;
                 Log.LogInfo("ForestCraft: handing the body to Minecraft, seq " + teleportSeq);
@@ -105,10 +143,12 @@ namespace ForestCraft
             bool driving = Link.Driving;
             int fw, fh;
             FrameSize(out fw, out fh);
+            ModMenu.Update(inWorld && !scripted);
+            McScreen.Suppress = DevConsole.Open || ModMenu.Open;
             { double pq = Perf.Now(); McScreen.Update(Link.View, driving, fw, fh); Perf.Add("mcscreen", pq); }
             float yaw = 0f, pitch = 0f;
             Camera cam = LocalPlayerSafe.Camera();
-            if (driving && McScreen.Open)
+            if (driving && (McScreen.Open || DevConsole.Open || ModMenu.Open))
             {
                 // A Minecraft screen is open: the mouse is a cursor, the view stays put.
                 yaw = lookYaw;
@@ -130,21 +170,22 @@ namespace ForestCraft
             {
                 CameraAngles(cam, out yaw, out pitch);
             }
-            int input = inWorld && !McScreen.Open ? ReadInput() : 0;
-            if (driving && !McScreen.Open) ReadHotbarAndF5();
+            bool console = DevConsole.Open || ModMenu.Open;
+            int input = inWorld && !McScreen.Open && !console ? ReadInput() : 0;
+            if (driving && !McScreen.Open && !console) ReadHotbarAndF5();
             Link.WriteForest(x, y, z, yaw, pitch, teleportSeq, input, 0f, 0f, 0);
             Link.WriteView(driving ? cameraMode : 0, fw, fh, slot, Drive.ThirdPersonDistance);
             if (inWorld && !scripted)
             {
                 { double pq = Perf.Now(); Ground.Update(); Perf.Add("ground", pq); }
-                { double pq = Perf.Now(); Caves.Update(feet); Perf.Add("caves", pq); }
+                { double pq = Perf.Now(); Caves.Update(feet, input); Perf.Add("caves", pq); }
                 { double pq = Perf.Now(); SampleGrid((float)x, (float)z); Perf.Add("grid", pq); }
                 { double pq = Perf.Now(); FarGround.Update((float)x, (float)z); Perf.Add("far", pq); }
                 double ps = Perf.Now();
                 Solids.Step(x, y, z);
                 Perf.Add("solids", ps);
             }
-            Link.WriteSun(SunElevation());
+            { double pq = Perf.Now(); float sunNow = SunElevation(); Link.WriteSun(sunNow); Blocks.Daylight(sunNow, (Caves.Flags & 1) != 0); Perf.Add("sun", pq); }
             double pb = Perf.Now();
             Blocks.Update(Link.View);
             Perf.Add("blocks", pb);
@@ -153,6 +194,8 @@ namespace ForestCraft
             Perf.Add("dig", pd);
             { double pq = Perf.Now(); Trees.Update(input); Perf.Add("trees", pq); }
             { double pq = Perf.Now(); Combat.Update(input); Combat.Arrows(); Combat.UpdatePushes(); Perf.Add("combat", pq); }
+            { double pq = Perf.Now(); Tools.Update(input); Perf.Add("tools", pq); }
+            { double pq = Perf.Now(); MobFights.Update(); Perf.Add("mobfights", pq); }
             // Minecraft holds the player after a respawn until the colliders around it are known.
             Link.WriteIntAt(0x100 + 132, Solids.NearReady ? 1 : 0);
             { double pq = Perf.Now(); Blocks.ReadHit(Link.View); Perf.Add("hit", pq); }
@@ -161,6 +204,9 @@ namespace ForestCraft
             if (driving && !wasDriving) { Log.LogInfo("ForestCraft: Minecraft has the body"); Loot.DumpNames(); }
             wasDriving = driving;
             { double pq = Perf.Now(); if (driving) Drive.Apply(yaw, pitch, cameraMode); else Drive.Release(); Perf.Add("drive", pq); }
+            // After Drive: the camera is where Minecraft looks only from here on (before, it hung off
+            // The Forest's animated head, and the map was placed for that view).
+            { double pq = Perf.Now(); HeldMap.Update(); Perf.Add("map", pq); }
             // After Apply: Steve stands exactly where the camera was just placed from.
             double pe = Perf.Now();
             Entities.Update(Link.View, cameraMode != 0, Drive.LastFeet);
@@ -186,23 +232,57 @@ namespace ForestCraft
             return e;
         }
 
+        // The Forest's sun keeps turning at night, when it is switched off and the moon lights the
+        // scene (TheForestAtmosphere.Sun / Moon): read its direction whatever its state. Searching
+        // the scene for "the" directional light found nothing enabled at night and searched again
+        // every 5 s, all night long.
         static float SunElevationNow()
         {
-            if ((sun == null || !sun.isActiveAndEnabled) && Time.realtimeSinceStartup >= sunSearchAt)
+            Transform t = null;
+            try
             {
-                sunSearchAt = Time.realtimeSinceStartup + 5f;
-                sun = RenderSettings.sun;
-                if (sun == null)
-                {
-                    Light[] lights = Object.FindObjectsOfType<Light>();
-                    for (int i = 0; i < lights.Length; i++)
-                    {
-                        if (lights[i].type == LightType.Directional && (sun == null || lights[i].intensity > sun.intensity)) sun = lights[i];
-                    }
-                }
+                var atmo = TheForest.Utils.Scene.Atmosphere;
+                if (atmo != null && atmo.Sun != null) t = atmo.Sun.transform;
             }
-            if (sun == null) return float.NaN;
-            return Mathf.Asin(Mathf.Clamp(-sun.transform.forward.y, -1f, 1f)) * Mathf.Rad2Deg;
+            catch { }
+            if (t == null)
+            {
+                if (sun == null && Time.realtimeSinceStartup >= sunSearchAt)
+                {
+                    sunSearchAt = Time.realtimeSinceStartup + 30f;
+                    sun = RenderSettings.sun;
+                }
+                if (sun != null) t = sun.transform;
+            }
+            if (t == null) return float.NaN;
+            return Mathf.Asin(Mathf.Clamp(-t.forward.y, -1f, 1f)) * Mathf.Rad2Deg;
+        }
+
+        // What the 30 s perf line also says about the scene (night, quality, how many enemies).
+        public static string Context()
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("sun ").Append(LastSunElevation.ToString("0")).Append("°");
+            try { sb.Append(Clock.Dark ? " night" : " day"); } catch { }
+            try { sb.Append(", in caves ").Append(TheForest.Utils.LocalPlayer.IsInCaves); } catch { }
+            try { sb.Append(", quality ").Append(QualitySettings.names[QualitySettings.GetQualityLevel()]); } catch { }
+            try
+            {
+                Camera cam = LocalPlayerSafe.Camera();
+                if (cam != null) sb.Append(", path ").Append(cam.actualRenderingPath).Append(", far ").Append(cam.farClipPlane.ToString("0"));
+            }
+            catch { }
+            try
+            {
+                var mc = TheForest.Utils.Scene.MutantControler;
+                if (mc != null) sb.Append(", cannibals ").Append(mc.activeCannibals.Count + mc.activeInstantSpawnedCannibals.Count);
+            }
+            catch { }
+            sb.Append(", ").Append(Blocks.LightsInfo());
+            sb.Append(", ").Append(Corpses.Info());
+            sb.Append(", held light ").Append(HeldLight.On ? "on" : "off");
+            sb.Append(", res ").Append(Screen.width).Append('x').Append(Screen.height);
+            return sb.ToString();
         }
 
         float wantedScale = 1.8f;
@@ -274,6 +354,18 @@ namespace ForestCraft
             pitch = e.x > 180f ? e.x - 360f : e.x;
         }
 
+        // Re-applied every second: The Forest may set its own target frame rate (menus, loading).
+        static float nextFpsCheck;
+        static void ApplyFpsCap()
+        {
+            if (Time.realtimeSinceStartup < nextFpsCheck) return;
+            nextFpsCheck = Time.realtimeSinceStartup + 1f;
+            int cap = MaxFps != null ? MaxFps.Value : 0;
+            int want = cap > 0 ? cap : -1;
+            if (cap > 0 && QualitySettings.vSyncCount != 0) return; // vsync already caps it
+            if (Application.targetFrameRate != want) Application.targetFrameRate = want;
+        }
+
         void OnApplicationQuit()
         {
             Link.RequestQuit();
@@ -283,6 +375,7 @@ namespace ForestCraft
         {
             double po = Perf.Now();
             Overlay.Draw();
+            ModMenu.Draw();
             Perf.Add("overlay", po);
         }
 

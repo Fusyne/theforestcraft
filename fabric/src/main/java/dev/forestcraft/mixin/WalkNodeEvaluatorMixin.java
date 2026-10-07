@@ -22,6 +22,10 @@ public abstract class WalkNodeEvaluatorMixin {
 	private static void forestcraft$forestGround(BlockGetter level, BlockPos pos, CallbackInfoReturnable<PathType> cir) {
 		if (ForestLink.buffer() == null) return;
 		if (!level.getBlockState(pos).isAir()) return;
+		// The Forest's lakes are water for the path finder too (the path region only knows real
+		// blocks): without it a villager floating on a lake planned its way along the lake bed
+		// under it and spun round on the spot, unable to reach it.
+		if (ForestLink.waterAt(pos.getX(), pos.getY(), pos.getZ())) { cir.setReturnValue(PathType.WATER); return; }
 		if (!Double.isNaN(ForestLink.forestTop(pos.getX(), pos.getY(), pos.getZ()))) cir.setReturnValue(PathType.BLOCKED);
 	}
 
@@ -34,5 +38,24 @@ public abstract class WalkNodeEvaluatorMixin {
 		if (Double.isNaN(top)) return;
 		double floor = y + top;
 		if (floor > cir.getReturnValueD()) cir.setReturnValue(floor);
+	}
+
+	/** A swimmer's path on The Forest's water runs on its surface, like on Minecraft's. */
+	@Inject(method = "getFloorLevel(Lnet/minecraft/core/BlockPos;)D", at = @At("HEAD"), cancellable = true)
+	private void forestcraft$floatOnForestWater(BlockPos pos, CallbackInfoReturnable<Double> cir) {
+		if (ForestLink.buffer() == null) return;
+		if (!((WalkNodeEvaluator) (Object) this).canFloat()) return;
+		if (ForestLink.waterAt(pos.getX(), pos.getY(), pos.getZ())) cir.setReturnValue(pos.getY() + 0.5);
+	}
+
+	/** Where a path starts for a mob floating on The Forest's water: up to its surface. */
+	@com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation(method = "getStart", at = @At(value = "INVOKE",
+		target = "Lnet/minecraft/world/level/pathfinder/PathfindingContext;getBlockState(Lnet/minecraft/core/BlockPos;)Lnet/minecraft/world/level/block/state/BlockState;"))
+	private net.minecraft.world.level.block.state.BlockState forestcraft$startOnForestWater(net.minecraft.world.level.pathfinder.PathfindingContext context, BlockPos pos,
+			com.llamalad7.mixinextras.injector.wrapoperation.Operation<net.minecraft.world.level.block.state.BlockState> original) {
+		net.minecraft.world.level.block.state.BlockState state = original.call(context, pos);
+		if (state.isAir() && ForestLink.buffer() != null && ForestLink.waterAt(pos.getX(), pos.getY(), pos.getZ()))
+			return net.minecraft.world.level.block.Blocks.WATER.defaultBlockState();
+		return state;
 	}
 }

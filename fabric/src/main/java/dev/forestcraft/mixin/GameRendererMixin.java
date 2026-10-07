@@ -18,4 +18,9 @@ public abstract class GameRendererMixin {
 		ForestLink.frameWalk = state.entityRenderState.backwardsInterpolatedWalkDistance;
 		ForestLink.frameBob = state.entityRenderState.bob;
 	}
+
+	@Inject(method = "renderItemInHand", at = @At("HEAD"))
+	private void forestcraft$handView(net.minecraft.client.renderer.state.level.CameraRenderState camera, float partial, org.joml.Matrix4fc modelView, CallbackInfo ci) {
+		dev.forestcraft.HandView.MATRIX.set(modelView);
+	}
 }

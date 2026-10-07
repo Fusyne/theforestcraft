@@ -19,13 +19,47 @@ namespace ForestCraft
 
         static readonly Dictionary<long, GameObject> sections = new Dictionary<long, GameObject>();
         static readonly Dictionary<long, Material> materials = new Dictionary<long, Material>();
+        static readonly Dictionary<long, Material> worldMaterials = new Dictionary<long, Material>();
         static readonly Dictionary<Material, int> materialAtlas = new Dictionary<Material, int>();
         static readonly Texture2D[] atlases = new Texture2D[2];
         static readonly int[] atlasStamps = new int[2];
         static readonly Dictionary<int, Mesh> itemMeshes = new Dictionary<int, Mesh>();
         static readonly Dictionary<int, Material[]> itemMaterials = new Dictionary<int, Material[]>();
         static GameObject root;
-        static Shader solidShader, cutoutShader, fadeShader;
+        static Shader solidShader, cutoutShader, fadeShader, litShader;
+
+        // Minecraft's textures are bright and flat; under The Forest's sun (tuned for its own,
+        // darker textures) their tops burnt out to white and the faces turned away went black.
+        // Blocks get a little less of the sun (Albedo) and a fill light of their own, like
+        // Minecraft's minimum light: their own colour glowing faintly (Self-Illumin's _Illum
+        // alpha), stronger by day than at night.
+        const float Albedo = 0.82f;
+        static Texture2D fillTex;
+        static float fillNow = -1f;
+        static bool standardFill; // no Self-Illumin in this build: Standard's emission instead
+        static readonly List<KeyValuePair<Material, Color>> fillMats = new List<KeyValuePair<Material, Color>>();
+
+        /// <summary>Each frame: how much the blocks light themselves (sun elevation, caves).</summary>
+        public static void Daylight(float sunElevation, bool caves)
+        {
+            if (fillTex == null && !standardFill) return;
+            float day = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-6f, 18f, sunElevation));
+            float f = caves ? 0.07f : Mathf.Lerp(0.04f, 0.2f, day);
+            if (Mathf.Abs(f - fillNow) < 0.004f) return;
+            fillNow = f;
+            if (fillTex != null)
+            {
+                fillTex.SetPixel(0, 0, new Color(1f, 1f, 1f, f));
+                fillTex.Apply(false);
+            }
+            for (int i = fillMats.Count - 1; i >= 0; i--)
+            {
+                Material fm = fillMats[i].Key;
+                if (fm == null) { fillMats.RemoveAt(i); continue; }
+                Color t = fillMats[i].Value;
+                fm.SetColor("_EmissionColor", new Color(t.r * f, t.g * f, t.b * f, 1f));
+            }
+        }
         static bool shadersLogged;
         static byte[] buffer;
 
@@ -48,6 +82,7 @@ namespace ForestCraft
             if (view == IntPtr.Zero) return;
             LoadAtlas(view, 0, 92, "atlas.bin");
             LoadAtlas(view, 1, 148, "atlas_items.bin");
+            AtlasAnimations.Update();
             Cracks.Load(view);
             PickLights();
             int msg = Marshal.ReadInt32(view, OffMesh);
@@ -151,7 +186,7 @@ namespace ForestCraft
             foreach (var pair in groups)
             {
                 mesh.SetTriangles(pair.Value, sub);
-                mats[sub] = MaterialFor(pair.Key);
+                mats[sub] = item ? MaterialFor(pair.Key) : WorldMaterialFor(pair.Key);
                 sub++;
             }
             mesh.RecalculateBounds();
@@ -247,6 +282,13 @@ namespace ForestCraft
         static readonly List<KeyValuePair<float, Light>> byDistance = new List<KeyValuePair<float, Light>>();
         static float nextLightPick;
 
+        public static string LightsInfo()
+        {
+            int on = 0;
+            for (int i = 0; i < lights.Count; i++) if (lights[i] != null && lights[i].enabled) on++;
+            return "torch lights " + on + "/" + lights.Count;
+        }
+
         public static void PickLights()
         {
             if (Time.realtimeSinceStartup < nextLightPick) return;
@@ -269,21 +311,57 @@ namespace ForestCraft
             }
         }
 
-        public static Material MaterialFor(long key)
+        // An ARGB tint from Minecraft. A top byte of 0x80 | level is Minecraft's white flash
+        // (lit TNT, a swelling creeper): the colour goes above white, as bright as the flash.
+        public static Color TintOf(uint argb)
+        {
+            if (argb == 0xFFFFFFFF) return Color.white;
+            uint top = argb >> 24;
+            var c = new Color(((argb >> 16) & 255) / 255f, ((argb >> 8) & 255) / 255f, (argb & 255) / 255f, 1f);
+            if ((top & 0xF0) == 0x80)
+            {
+                float boost = 1f + (top & 0x0F) / 15f * 2.5f;
+                c = new Color(c.r * boost, c.g * boost, c.b * boost, 1f);
+            }
+            return c;
+        }
+
+        /// <summary>Blocks placed in the world and the faces around holes: the softened light
+        /// (less sun, a fill of their own). Items, drops and particles keep the plain material.</summary>
+        public static Material WorldMaterialFor(long key) { return MaterialFor(key, true); }
+
+        public static Material MaterialFor(long key) { return MaterialFor(key, false); }
+
+        static Material MaterialFor(long key, bool world)
         {
             Material m;
-            if (materials.TryGetValue(key, out m) && m != null) return m;
+            var cache = world ? worldMaterials : materials;
+            if (cache.TryGetValue(key, out m) && m != null) return m;
             FindShaders();
             int packed = (int)(key >> 32);
             int layer = packed & 0xFF;
             int atlasId = (packed >> 8) & 0xFF;
             if (atlasId > 1) atlasId = 0;
             uint argb = (uint)(key & 0xFFFFFFFF);
-            Shader shader = layer == 0 ? solidShader : layer == 2 && fadeShader != null ? fadeShader : cutoutShader;
+            bool lit = world && layer == 0 && litShader != null && (fillTex != null || standardFill);
+            Shader shader = lit ? litShader : layer == 0 ? solidShader : layer == 2 && fadeShader != null ? fadeShader : cutoutShader;
             m = new Material(shader);
             m.mainTexture = atlases[atlasId];
-            Color tint = argb == 0xFFFFFFFF ? Color.white : new Color(((argb >> 16) & 255) / 255f, ((argb >> 8) & 255) / 255f, (argb & 255) / 255f, 1f);
-            m.color = tint;
+            Color tint = TintOf(argb);
+            m.color = !world || layer == 2 ? tint : new Color(tint.r * Albedo, tint.g * Albedo, tint.b * Albedo, tint.a);
+            if (lit && standardFill)
+            {
+                // Standard: no shine, and its emission (the block's own texture, faint) as the fill.
+                m.SetFloat("_Glossiness", 0f);
+                m.SetFloat("_Metallic", 0f);
+                m.EnableKeyword("_EMISSION");
+                m.SetTexture("_EmissionMap", atlases[atlasId]);
+                float f = fillNow < 0f ? 0.15f : fillNow;
+                m.SetColor("_EmissionColor", new Color(tint.r * f, tint.g * f, tint.b * f, 1f));
+                m.globalIlluminationFlags = MaterialGlobalIlluminationFlags.None;
+                fillMats.Add(new KeyValuePair<Material, Color>(m, tint));
+            }
+            else if (lit) m.SetTexture("_Illum", fillTex);
             if (m.HasProperty("_Cutoff")) m.SetFloat("_Cutoff", 0.5f);
             if (shader.name == "Standard")
             {
@@ -296,7 +374,7 @@ namespace ForestCraft
                     m.renderQueue = 2450;
                 }
             }
-            materials[key] = m;
+            cache[key] = m;
             materialAtlas[m] = atlasId;
             return m;
         }
@@ -318,12 +396,26 @@ namespace ForestCraft
             cutoutShader = First("Legacy Shaders/Transparent/Cutout/Diffuse", "Transparent/Cutout/Diffuse", "Standard", "Unlit/Transparent Cutout");
             // Translucent layer (water, stained glass, ice): real alpha blending when available.
             fadeShader = First("Legacy Shaders/Transparent/Diffuse", "Transparent/Diffuse", "Legacy Shaders/Transparent/Cutout/Diffuse", "Transparent/Cutout/Diffuse");
+            litShader = First("Legacy Shaders/Self-Illumin/Diffuse", "Self-Illumin/Diffuse");
+            if (litShader == null)
+            {
+                litShader = First("Standard");
+                standardFill = litShader != null;
+            }
+            if (litShader != null && !standardFill && fillTex == null)
+            {
+                fillTex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+                fillTex.wrapMode = TextureWrapMode.Repeat;
+                fillTex.SetPixel(0, 0, new Color(1f, 1f, 1f, 0.15f));
+                fillTex.Apply(false);
+                fillNow = 0.15f;
+            }
             if (solidShader == null) solidShader = cutoutShader;
             if (cutoutShader == null) cutoutShader = solidShader;
             if (!shadersLogged)
             {
                 shadersLogged = true;
-                Plugin.Log.LogInfo("ForestCraft: block shaders " + (solidShader != null ? solidShader.name : "none") + " / " + (cutoutShader != null ? cutoutShader.name : "none"));
+                Plugin.Log.LogInfo("ForestCraft: block shaders " + (litShader != null ? litShader.name + " (fill light)" : solidShader != null ? solidShader.name : "none") + " / " + (cutoutShader != null ? cutoutShader.name : "none"));
             }
         }
 
@@ -336,8 +428,14 @@ namespace ForestCraft
             Texture2D tex = LoadTexture(file, atlases[id]);
             if (tex == null) { atlasStamps[id] = 0; return; }
             atlases[id] = tex;
-            foreach (var pair in materialAtlas) if (pair.Key != null && pair.Value == id) pair.Key.mainTexture = tex;
+            foreach (var pair in materialAtlas)
+            {
+                if (pair.Key == null || pair.Value != id) continue;
+                pair.Key.mainTexture = tex;
+                if (pair.Key.HasProperty("_EmissionMap") && pair.Key.IsKeywordEnabled("_EMISSION")) pair.Key.SetTexture("_EmissionMap", tex);
+            }
             Plugin.Log.LogInfo("ForestCraft: " + file + " " + tex.width + "x" + tex.height + " loaded");
+            if (id == 0) AtlasAnimations.Load(tex);
         }
 
         public static Texture2D LoadTexture(string file, Texture2D reuse)
@@ -381,6 +479,12 @@ namespace ForestCraft
         public static Texture2D Atlas(int id)
         {
             return id >= 0 && id < atlases.Length ? atlases[id] : null;
+        }
+
+        public static Shader FadeShader()
+        {
+            FindShaders();
+            return fadeShader;
         }
 
         public static Shader CutoutShader()

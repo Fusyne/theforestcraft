@@ -21,7 +21,9 @@ public final class FrameCapture {
 
 	public static void capture(Minecraft minecraft) {
 		if (state == READY) {
+			long t = System.nanoTime();
 			ship();
+			McPerf.add(McPerf.SHIP, t);
 			state = FREE;
 		}
 		if (state != FREE) return;

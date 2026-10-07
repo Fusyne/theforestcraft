@@ -18,6 +18,13 @@ namespace ForestCraft
         static int slow, slowGc;
         static float windowStart;
 
+        // The 30 s summary: every frame counts, not only the slow ones (a steady 25 fps never
+        // makes a "slow frame" but is what "it lags" usually means).
+        static int frames, over33, over50;
+        static double frameMs, worstMs, oursMs, oursWorst;
+        static readonly double[] sumPart = new double[24];
+        static double oursStart;
+
         // Memory at the last Now(): Add() also counts what the part allocated.
         static long nowMem;
         static readonly long[] partBytes = new long[24];
@@ -47,6 +54,9 @@ namespace ForestCraft
         /// <summary>End of ForestCraft's LateUpdate.</summary>
         public static void EndOfOurs()
         {
+            double ours = watch.Elapsed.TotalMilliseconds - oursStart;
+            oursMs += ours;
+            if (ours > oursWorst) oursWorst = ours;
             Count(ref oursBytes, memOursStart, System.GC.GetTotalMemory(false));
         }
 
@@ -69,7 +79,13 @@ namespace ForestCraft
             Count(ref allBytes, memFrameStart, mem);
             memFrameStart = mem;
             memOursStart = mem;
+            oursStart = watch.Elapsed.TotalMilliseconds;
             float dt = UnityEngine.Time.unscaledDeltaTime * 1000f;
+            frames++;
+            frameMs += dt;
+            if (dt > worstMs) worstMs = dt;
+            if (dt > 33.4f) over33++;
+            if (dt > 50f) over50++;
             int gc = System.GC.CollectionCount(0);
             bool collected = lastGc >= 0 && gc != lastGc;
             lastGc = gc;
@@ -94,6 +110,23 @@ namespace ForestCraft
             }
             if (now - windowStart > 30f)
             {
+                if (frames > 0)
+                {
+                    var sb3 = new System.Text.StringBuilder("ForestCraft: perf last 30 s: ");
+                    sb3.Append((1000.0 * frames / System.Math.Max(1.0, frameMs)).ToString("0.0")).Append(" fps, worst ").Append(worstMs.ToString("0"))
+                        .Append(" ms, ").Append(over33).Append(" frames > 33 ms, ").Append(over50).Append(" > 50 ms; ForestCraft ")
+                        .Append((oursMs / frames).ToString("0.00")).Append(" ms/frame (worst ").Append(oursWorst.ToString("0.0")).Append("): ");
+                    for (int i = 0; i < parts; i++)
+                    {
+                        double avg = sumPart[i] / frames;
+                        if (avg >= 0.05) sb3.Append(names[i]).Append(' ').Append(avg.ToString("0.00")).Append(", ");
+                    }
+                    sb3.Append("| ").Append(Plugin.Context());
+                    Plugin.Log.LogInfo(sb3.ToString());
+                }
+                frames = over33 = over50 = 0;
+                frameMs = worstMs = oursMs = oursWorst = 0;
+                for (int i = 0; i < sumPart.Length; i++) sumPart[i] = 0;
                 if (slow > 0) Plugin.Log.LogInfo("ForestCraft: last 30 s: " + slow + " slow frames, " + slowGc + " of them garbage collections"
                     + "; allocated " + (allBytes >> 20) + " MB in all, " + (oursBytes >> 10) + " KB by ForestCraft's update");
                 if (allBytes > (8L << 20))
@@ -107,7 +140,7 @@ namespace ForestCraft
                 windowStart = now;
                 slow = slowGc = 0;
             }
-            for (int i = 0; i < parts; i++) { last[i] = cur[i]; cur[i] = 0; }
+            for (int i = 0; i < parts; i++) { sumPart[i] += cur[i]; last[i] = cur[i]; cur[i] = 0; }
         }
     }
 }

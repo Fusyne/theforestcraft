@@ -38,6 +38,12 @@ namespace ForestCraft
             return head || stem;
         }
 
+        public static Texture2D Arrow()
+        {
+            if (arrow == null) arrow = MakeArrow();
+            return arrow;
+        }
+
         static Texture2D MakeArrow()
         {
             const int n = 16;
@@ -73,6 +79,8 @@ namespace ForestCraft
             keysWritten = 0;
         }
 
+        public static bool Suppress;
+
         public static void Update(IntPtr view, bool driving, int frameW, int frameH)
         {
             if (view == IntPtr.Zero) return;
@@ -82,6 +90,7 @@ namespace ForestCraft
             if (!driving) return;
             if (!Open)
             {
+                if (Suppress) return; // typing in The Forest's console
                 int kind = 0;
                 if (UnityEngine.Input.GetKeyDown(KeyCode.I)) kind = 1; // E stays The Forest's "take"
                 else if (UnityEngine.Input.GetKeyDown(KeyCode.T)) kind = 2;
@@ -185,7 +194,7 @@ namespace ForestCraft
         static IEnumerable<System.Reflection.MethodBase> TargetMethods() { return ForestInputTargets.Of(typeof(bool)); }
         static bool Prefix(ref bool __result)
         {
-            if (!McScreen.Open) return true;
+            if (!McScreen.Open && !ModMenu.Open) return true;
             __result = false;
             return false;
         }
@@ -197,7 +206,7 @@ namespace ForestCraft
         static IEnumerable<System.Reflection.MethodBase> TargetMethods() { return ForestInputTargets.Of(typeof(float)); }
         static bool Prefix(ref float __result)
         {
-            if (!McScreen.Open) return true;
+            if (!McScreen.Open && !ModMenu.Open) return true;
             __result = 0f;
             return false;
         }
@@ -207,6 +216,6 @@ namespace ForestCraft
     static class MuteForestMouseLock
     {
         static IEnumerable<System.Reflection.MethodBase> TargetMethods() { return ForestInputTargets.Of(typeof(void)); }
-        static bool Prefix() { return !McScreen.Open; }
+        static bool Prefix() { return !McScreen.Open && !ModMenu.Open; }
     }
 }

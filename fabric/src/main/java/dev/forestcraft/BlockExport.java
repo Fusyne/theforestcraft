@@ -23,6 +23,7 @@ import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -518,6 +519,7 @@ public final class BlockExport {
 				src.get(chunk, 0, n);
 				out.write(chunk, 0, n);
 			}
+			if (exportIndex == 0) writeAnimations(minecraft, file.resolveSibling("atlas_anim.bin"));
 			int stamp = exportStamp(exportIndex);
 			if (stamp > 0) map.putInt(Proto.OFF_MC + stamp, (int) (System.currentTimeMillis() & 0x7fffffff));
 			if (exportIndex >= 13) map.putInt(Proto.OFF_MC + 164, exportIndex - 13 + 1);
@@ -529,6 +531,86 @@ public final class BlockExport {
 		atlasBuffer = null;
 		atlasState = 0;
 		exportIndex++;
+	}
+
+	/**
+	 * The blocks atlas moves: water, lava, fire, portals, sea lanterns, magma... Minecraft
+	 * re-uploads their frames into its atlas every tick; The Forest has a copy of the atlas, so it
+	 * gets each animated sprite's frames and timing once (atlas_anim.bin) and plays them itself.
+	 * Layout (little endian): count, then per sprite: u0 v0 u1 v1 (floats), frame w, h, image w, h,
+	 * frames per row, frame count, (index, ticks) per frame, then the image as RGBA rows.
+	 */
+	private static void writeAnimations(Minecraft minecraft, Path file) {
+		try {
+			// By its texture location (the atlas manager knows atlases by their own ids, not this one).
+			if (!(minecraft.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS) instanceof TextureAtlas atlas)) {
+				ForestLink.LOG.warn("animated textures not exported: no blocks atlas");
+				return;
+			}
+			java.lang.reflect.Field spritesField = TextureAtlas.class.getDeclaredField("sprites");
+			spritesField.setAccessible(true);
+			List<?> sprites = (List<?>) spritesField.get(atlas);
+			java.lang.reflect.Field animField = net.minecraft.client.renderer.texture.SpriteContents.class.getDeclaredField("animatedTexture");
+			java.lang.reflect.Field imageField = net.minecraft.client.renderer.texture.SpriteContents.class.getDeclaredField("originalImage");
+			animField.setAccessible(true);
+			imageField.setAccessible(true);
+			java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+			java.io.DataOutputStream body = new java.io.DataOutputStream(bytes);
+			int count = 0;
+			for (Object o : sprites) {
+				TextureAtlasSprite sprite = (TextureAtlasSprite) o;
+				var contents = sprite.contents();
+				if (!contents.isAnimated()) continue;
+				Object anim = animField.get(contents);
+				com.mojang.blaze3d.platform.NativeImage image = (com.mojang.blaze3d.platform.NativeImage) imageField.get(contents);
+				if (anim == null || image == null) continue;
+				java.lang.reflect.Field framesField = anim.getClass().getDeclaredField("frames");
+				java.lang.reflect.Field rowField = anim.getClass().getDeclaredField("frameRowSize");
+				framesField.setAccessible(true);
+				rowField.setAccessible(true);
+				List<?> frames = (List<?>) framesField.get(anim);
+				int row = rowField.getInt(anim);
+				if (frames == null || frames.isEmpty() || row <= 0) continue;
+				int[] abgr = image.getPixelsABGR();
+				int iw = image.getWidth(), ih = image.getHeight();
+				if (abgr == null || abgr.length < iw * ih) continue;
+				java.io.ByteArrayOutputStream one = new java.io.ByteArrayOutputStream();
+				java.io.DataOutputStream d = new java.io.DataOutputStream(one);
+				d.writeInt(Integer.reverseBytes(Float.floatToIntBits(sprite.getU0())));
+				d.writeInt(Integer.reverseBytes(Float.floatToIntBits(sprite.getV0())));
+				d.writeInt(Integer.reverseBytes(Float.floatToIntBits(sprite.getU1())));
+				d.writeInt(Integer.reverseBytes(Float.floatToIntBits(sprite.getV1())));
+				d.writeInt(Integer.reverseBytes(contents.width()));
+				d.writeInt(Integer.reverseBytes(contents.height()));
+				d.writeInt(Integer.reverseBytes(iw));
+				d.writeInt(Integer.reverseBytes(ih));
+				d.writeInt(Integer.reverseBytes(row));
+				d.writeInt(Integer.reverseBytes(frames.size()));
+				for (Object f : frames) {
+					java.lang.reflect.Method index = f.getClass().getDeclaredMethod("index");
+					java.lang.reflect.Method time = f.getClass().getDeclaredMethod("time");
+					index.setAccessible(true);
+					time.setAccessible(true);
+					d.writeInt(Integer.reverseBytes((Integer) index.invoke(f)));
+					d.writeInt(Integer.reverseBytes(Math.max(1, (Integer) time.invoke(f))));
+				}
+				// ABGR ints are R, G, B, A bytes in memory order: written little endian.
+				for (int i = 0; i < iw * ih; i++) d.writeInt(Integer.reverseBytes(abgr[i]));
+				d.flush();
+				one.writeTo(body);
+				count++;
+			}
+			body.flush();
+			try (OutputStream out = Files.newOutputStream(file, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+				byte[] head = new byte[4];
+				ByteBuffer.wrap(head).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(count);
+				out.write(head);
+				bytes.writeTo(out);
+			}
+			ForestLink.LOG.info("{} animated block textures exported for The Forest", count);
+		} catch (ReflectiveOperationException | IOException | RuntimeException e) {
+			ForestLink.LOG.warn("animated textures not exported: {}", e.toString());
+		}
 	}
 
 	// ---- block breaking progress (local player), drawn as cracks by The Forest ----

@@ -113,9 +113,14 @@ namespace ForestCraft
             return now >= beat && now - beat < 2000;
         }
 
+        public static bool ForestMoved;
         static int drivingFrame = -1;
         static int lastMoved = int.MinValue;
         static float movedAt = -100f;
+
+        /// <summary>ForestCraft sends the body somewhere itself (a cave mouth, a rope): for a while
+        /// a gap between Minecraft and The Forest's puppet is that move, not a fall through.</summary>
+        public static void OwnMove() { movedAt = Time.realtimeSinceStartup; }
         static bool drivingCached;
 
         // Asked many times a frame (and by the input patches, for every button The Forest
@@ -137,6 +142,9 @@ namespace ForestCraft
             {
                 // SkyCraft's rule: once Minecraft has arrived, it owns the body, including jumps.
                 // Releasing on every airborne tick is what snapped the player back to The Forest.
+                // The Forest itself moved the player (console goto, a cave door...): The Forest keeps
+                // the body until Minecraft has been sent there (Plugin hands it over again).
+                if (ForestMoved) { puppetLatched = false; return false; }
                 if (!McAlive() || !ForestInWorld() || LocalPlayerSafe.Scripted())
                 {
                     puppetLatched = false;
