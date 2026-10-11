@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace ForestCraft
 {
-    [BepInPlugin("dev.forestcraft", "ForestCraft", "0.4.0")]
+    [BepInPlugin("dev.forestcraft", "ForestCraft", "0.4.1")]
     public class Plugin : BaseUnityPlugin
     {
         public static ManualLogSource Log;
@@ -28,6 +28,8 @@ namespace ForestCraft
         BepInEx.Configuration.ConfigEntry<string> digCap;
         public static float CursorSpeed = 10f;
         float lookYaw, lookPitch;
+        float boatYaw;
+        bool inBoat;
         int cameraMode;   // 0 first person, 1 behind, 2 in front (F5, like Minecraft)
         int slot;
 
@@ -163,6 +165,20 @@ namespace ForestCraft
                 lookYaw = Mathf.Repeat(lookYaw + Input.GetAxis("Mouse X") * k, 360f);
                 float dy = Input.GetAxis("Mouse Y") * k;
                 lookPitch = Mathf.Clamp(lookPitch + (invertY.Value ? dy : -dy), -89.9f, 89.9f);
+                // In a boat the view turns with it and stays within 105 degrees of its bow, like
+                // Minecraft (which did it on its side 20 times a second, fighting this view).
+                float boat;
+                if (Drive.BoatYaw(out boat))
+                {
+                    if (inBoat) lookYaw += Mathf.DeltaAngle(boatYaw, boat);
+                    float rel = Mathf.DeltaAngle(boat, lookYaw + Link.YawFromMc);
+                    if (rel > 105f) lookYaw -= rel - 105f;
+                    else if (rel < -105f) lookYaw -= rel + 105f;
+                    lookYaw = Mathf.Repeat(lookYaw, 360f);
+                    boatYaw = boat;
+                    inBoat = true;
+                }
+                else inBoat = false;
                 yaw = lookYaw;
                 pitch = lookPitch;
             }

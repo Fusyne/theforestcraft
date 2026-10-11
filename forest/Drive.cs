@@ -98,6 +98,20 @@ namespace ForestCraft
             return Vector3.Lerp(fromFeet, toFeet, t);
         }
 
+        /// <summary>
+        /// The boat under the player (Minecraft yaw), between its last two ticks on the same clock as
+        /// the feet. False when not in a boat.
+        /// </summary>
+        public static bool BoatYaw(out float yaw)
+        {
+            yaw = 0f;
+            Link.McSnapshot mc;
+            if (!Link.ReadMc(out mc) || (mc.rideFlags & 1) == 0) return false;
+            float t = mc.tick == lastTick ? Mathf.Clamp01((Time.realtimeSinceStartup - tickSeenAt) / 0.05f) : 0f;
+            yaw = mc.rideYawO + Mathf.DeltaAngle(mc.rideYawO, mc.rideYaw) * t;
+            return true;
+        }
+
         /// <summary>The Forest player's standing height in Unity units (capsule), or 0.</summary>
         public static float ForestHeight()
         {
@@ -351,6 +365,16 @@ namespace ForestCraft
 
     [HarmonyPatch(typeof(FirstPersonCharacter), "Update")]
     static class PatchUpdate
+    {
+        static bool Prefix() { return !Link.Driving; }
+    }
+
+    // The Forest's footsteps and landing thuds come from its head bob, every time the body moves
+    // while its character says "grounded". That flag is frozen while Minecraft drives (the
+    // character's updates above are off), so they played even flying in creative. Minecraft
+    // plays its own steps, landings and swimming on The Forest's ground.
+    [HarmonyPatch(typeof(FirstPersonHeadBob), "FixedUpdate")]
+    static class PatchHeadBob
     {
         static bool Prefix() { return !Link.Driving; }
     }

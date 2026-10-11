@@ -19,21 +19,25 @@ namespace ForestCraft
         static float nextScan, nextPublish;
         static int lastOx = int.MinValue, lastOz = int.MinValue, lastCaves = -1;
         static int lastCount = -1;
+        static int scanOx, scanOz;
 
         public static void Update(int ox, int oz)
         {
             System.IntPtr view = Link.View;
             if (view == System.IntPtr.Zero) return;
             float now = Time.realtimeSinceStartup;
-            if (now >= nextScan)
+            // Again every 2 s, and as soon as the window has gone 6 blocks from the last search: in a
+            // boat, lakes and rivers ahead were missing for a moment and the boat ran aground on them.
+            if (now >= nextScan || System.Math.Abs(ox - scanOx) > 6 || System.Math.Abs(oz - scanOz) > 6)
             {
                 // Every water trigger around the window (tag "Water", as The Forest's Buoyancy
                 // checks it, or the Water layer), found by the physics engine itself.
                 nextScan = now + 2f;
+                scanOx = ox; scanOz = oz;
                 volumes.Clear();
                 float kk = Link.Scale;
                 Vector3 center = new Vector3((ox + Link.Grid * 0.5f) * kk, 0f, -(oz + Link.Grid * 0.5f) * kk);
-                Vector3 half = new Vector3(Link.Grid * 0.5f * kk + 4f, 2000f, Link.Grid * 0.5f * kk + 4f);
+                Vector3 half = new Vector3(Link.Grid * 0.5f * kk + 16f, 2000f, Link.Grid * 0.5f * kk + 16f);
                 Collider[] found = Physics.OverlapBox(center, half, Quaternion.identity, ~0, QueryTriggerInteraction.Collide);
                 for (int i = 0; i < found.Length; i++)
                 {

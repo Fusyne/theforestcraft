@@ -36,7 +36,8 @@ import org.joml.Vector3f;
  * Once per frame the list is published; The Forest builds one mesh per entity in its scene.
  *
  * Layout at OFF_ENTITIES: seq, entity count, quad count; table of MAX_ENTITIES x 32 bytes
- * (flags: 1 = local player, x, y, z, first quad, quad count); then quads of 100 bytes:
+ * (flags: 1 = local player, 2 = block entity, 4 = rides with the local player: x, y, z are then
+ * relative to him; x, y, z, first quad, quad count); then quads of 100 bytes:
  * 4 x (x, y, z, u, v), normal, material (>= 0 texture index, -1 blocks atlas, -2 items atlas), ARGB.
  * Textures are exported once each as tex_N.bin; OFF_MC+164 = how many are ready.
  */
@@ -133,7 +134,37 @@ public final class EntityExport {
 	}
 
 	public static void begin(net.minecraft.client.renderer.entity.state.EntityRenderState state, CameraRenderState camera) {
-		begin(state.x, state.y, state.z, camera, state instanceof AvatarRenderState ? 1 : 0);
+		boolean avatar = state instanceof AvatarRenderState;
+		begin(state.x, state.y, state.z, camera, avatar ? 1 : 0);
+		if (!avatar && depth == 1 && open) rideAlong(state);
+	}
+
+	/**
+	 * The boat (or minecart, horse...) under the local player, and whatever rides it with him:
+	 * published relative to the player as Minecraft draws both in this frame (flags 4). The
+	 * Forest's camera interpolates on its own clock, so placed in the world the boat shook under
+	 * the camera; placed from the camera's feet it moves with it.
+	 */
+	private static void rideAlong(net.minecraft.client.renderer.entity.state.EntityRenderState state) {
+		net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+		net.minecraft.client.player.LocalPlayer player = mc.player;
+		if (player == null || !player.isPassenger()) return;
+		float pt = mc.getDeltaTracker().getGameTimeDeltaPartialTick(true);
+		net.minecraft.world.entity.Entity root = player.getRootVehicle();
+		boolean along = false;
+		for (net.minecraft.world.entity.Entity e : root.getSelfAndPassengers().toList()) {
+			if (e == player || e.getType() != state.entityType) continue;
+			double ex = e.xo + (e.getX() - e.xo) * pt, ey = e.yo + (e.getY() - e.yo) * pt, ez = e.zo + (e.getZ() - e.zo) * pt;
+			if (Math.abs(ex - state.x) < 0.05 && Math.abs(ey - state.y) < 0.05 && Math.abs(ez - state.z) < 0.05) { along = true; break; }
+		}
+		if (!along) return;
+		double px = player.xo + (player.getX() - player.xo) * pt;
+		double py = player.yo + (player.getY() - player.yo) * pt;
+		double pz = player.zo + (player.getZ() - player.zo) * pt;
+		entFlags[entities] = 4;
+		entPos[entities * 3] = (float) (state.x - px);
+		entPos[entities * 3 + 1] = (float) (state.y - py);
+		entPos[entities * 3 + 2] = (float) (state.z - pz);
 	}
 
 	public static void end() {

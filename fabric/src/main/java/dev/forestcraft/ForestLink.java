@@ -127,7 +127,10 @@ public final class ForestLink {
 		if (settledSeq == forest.teleportSeq()) {
 			// Inside something for half a second (a cave floor met at an angle, the plane's hull
 			// arriving after the body): climb out instead of staying stuck.
-			if (!player.isSpectator() && !player.level().noCollision(player, player.getBoundingBox().deflate(1.0e-3))) {
+			// Blocks and The Forest's solids only: standing on a boat (it bobs on the water, so the
+			// feet sink into its top every other tick), every "climb out" shook the player on it.
+			// And not seated in one (or on a horse...).
+			if (!player.isSpectator() && !player.isPassenger() && !player.level().noBlockCollision(player, player.getBoundingBox().deflate(1.0e-3))) {
 				if (++stuckTicks >= 10) { stuckTicks = 0; unstuck(player); }
 			} else stuckTicks = 0;
 			return;
@@ -233,12 +236,13 @@ public final class ForestLink {
 
 	/** Inside the plane's hull or a rock once its collisions arrive: climb out, at most 4 blocks. */
 	public static void unstuck(net.minecraft.server.level.ServerPlayer player) {
+		if (player.isPassenger()) return;
 		var level = player.level();
 		var box = player.getBoundingBox().deflate(1.0e-3);
-		if (level.noCollision(player, box)) return;
+		if (level.noBlockCollision(player, box)) return;
 		for (int i = 1; i <= 32; i++) {
 			double up = i * 0.125;
-			if (level.noCollision(player, box.move(0, up, 0))) {
+			if (level.noBlockCollision(player, box.move(0, up, 0))) {
 				player.teleportTo(player.getX(), player.getY() + up, player.getZ());
 				player.setDeltaMovement(Vec3.ZERO);
 				player.resetFallDistance();
@@ -376,6 +380,32 @@ public final class ForestLink {
 		return null;
 	}
 
+	/** xo/yo/zo is where this tick started: The Forest lerps from there to here, like MC's own renderer. */
+	public static void publishPlayer(net.minecraft.client.player.LocalPlayer player) {
+		net.minecraft.world.entity.Entity vehicle = player.getVehicle();
+		if (vehicle != null && isBoat(vehicle)) {
+			rideFlags = 1;
+			rideYaw = vehicle.getYRot();
+			rideYawO = vehicle.yRotO;
+		} else {
+			rideFlags = 0;
+		}
+		publishPlayer(player.xo, player.yo, player.zo, player.getX(), player.getY(), player.getZ(),
+			player.getYRot(), player.getXRot(), player.onGround(), teleportAck());
+	}
+
+	// In a boat (OFF_MC+208..216): its yaw at the start and end of this tick, flags 1. Minecraft
+	// turns the rider with his boat and keeps him within 105 degrees of its bow; The Forest owns
+	// the view, so it does both on its side, smoothly.
+	private static int rideFlags;
+	private static float rideYaw, rideYawO;
+
+	private static boolean isBoat(net.minecraft.world.entity.Entity e) {
+		for (Class<?> c = e.getClass(); c != null; c = c.getSuperclass())
+			if (c.getSimpleName().equals("AbstractBoat")) return true;
+		return false;
+	}
+
 	public static void publishPlayer(double px, double py, double pz, double x, double y, double z, float yaw, float pitch, boolean onGround, int teleportAck) {
 		if (map == null && !open()) return;
 		int seq = map.getInt(Proto.OFF_MC) + 1;
@@ -397,6 +427,9 @@ public final class ForestLink {
 		map.putDouble(Proto.OFF_MC + 56, py);
 		map.putDouble(Proto.OFF_MC + 64, pz);
 		map.putInt(Proto.OFF_MC + 72, ++tickCount);
+		map.putFloat(Proto.OFF_MC + 208, rideYaw);
+		map.putFloat(Proto.OFF_MC + 212, rideYawO);
+		map.putInt(Proto.OFF_MC + 216, rideFlags);
 		map.putInt(Proto.OFF_MC, seq + 1);
 		heartbeat();
 	}
@@ -794,6 +827,14 @@ public final class ForestLink {
 		double h = heightAt(x, z);
 		if (Double.isNaN(h)) h = farHeight(x, z);
 		return Double.isNaN(h) ? Integer.MIN_VALUE : (int) Math.floor(h - 1e-4);
+	}
+
+	/** A heightmap answer raised onto The Forest's ground (the overworld only), where it is known. */
+	public static net.minecraft.core.BlockPos onForestGround(net.minecraft.world.level.Level level, net.minecraft.core.BlockPos p) {
+		if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) return p;
+		int top = groundTopAny(p.getX(), p.getZ());
+		if (top == Integer.MIN_VALUE || top + 1 <= p.getY()) return p;
+		return new net.minecraft.core.BlockPos(p.getX(), top + 1, p.getZ());
 	}
 
 	/** Minecraft knows the island's ground in this column (near or far grid). */

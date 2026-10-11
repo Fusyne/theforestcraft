@@ -373,12 +373,14 @@ namespace ForestCraft
             for (int e = 0; e < shown && e < slots.Count; e++)
             {
                 int at = 16 + e * 32;
-                bool local = (BitConverter.ToInt32(buffer, at) & 1) != 0;
+                int flags = BitConverter.ToInt32(buffer, at);
+                bool local = (flags & 1) != 0;
                 GameObject go = slots[e];
                 if (local && !thirdPerson) { if (go.activeSelf) go.SetActive(false); continue; }
-                // Steve stands where the camera is placed from; others where Minecraft has them.
-                go.transform.position = local ? localFeet
-                    : new Vector3(BitConverter.ToSingle(buffer, at + 4) * k, BitConverter.ToSingle(buffer, at + 8) * k, -BitConverter.ToSingle(buffer, at + 12) * k);
+                // Steve stands where the camera is placed from, and his boat (flags 4: relative to
+                // him) under him from there too; others where Minecraft has them.
+                Vector3 p = new Vector3(BitConverter.ToSingle(buffer, at + 4) * k, BitConverter.ToSingle(buffer, at + 8) * k, -BitConverter.ToSingle(buffer, at + 12) * k);
+                go.transform.position = local ? localFeet : (flags & 4) != 0 ? localFeet + p : p;
                 go.transform.localScale = Vector3.one * k;
                 if (!go.activeSelf) go.SetActive(true);
             }

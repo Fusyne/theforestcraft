@@ -163,8 +163,12 @@ namespace ForestCraft
                 if (lastMoved == int.MinValue) lastMoved = moved;
                 else if (moved != lastMoved) { lastMoved = moved; movedAt = Time.realtimeSinceStartup; }
                 bool justMoved = Time.realtimeSinceStartup - movedAt < 15f;
+                // The body is drawn up to a tick behind Minecraft (interpolation): falling fast
+                // (a long drop in creative) that alone opened a gap of more than 5 units, and The
+                // Forest took the body back for a second. Allow for this tick's fall.
                 Vector3 gap = McToUnity(mc.x, mc.y, mc.z) - Drive.Feet();
-                if (gap.y < -5f && !justMoved)
+                float fall = Mathf.Max(0f, (float)(mc.py - mc.y)) * Scale;
+                if (gap.y < -5f - 2f * fall && !justMoved)
                 {
                     puppetLatched = false;
                     return false;
@@ -286,6 +290,9 @@ namespace ForestCraft
             public int mouseAck;
             public double px, py, pz;
             public int tick;
+            // In a boat (flags 1): its Minecraft yaw at the start and end of the tick.
+            public float rideYaw, rideYawO;
+            public int rideFlags;
         }
 
         public static bool ReadMc(out McSnapshot mc)
@@ -309,6 +316,9 @@ namespace ForestCraft
                 mc.py = ReadDouble(OffMc + 56);
                 mc.pz = ReadDouble(OffMc + 64);
                 mc.tick = ReadInt(OffMc + 72);
+                mc.rideYaw = ReadFloat(OffMc + 208);
+                mc.rideYawO = ReadFloat(OffMc + 212);
+                mc.rideFlags = ReadInt(OffMc + 216);
                 if (ReadInt(OffMc) == seq) return true;
             }
             return false;

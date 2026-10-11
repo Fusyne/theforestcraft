@@ -201,8 +201,8 @@ The two games talk through shared memory (`%LOCALAPPDATA%\ForestCraft\link.bin`)
 
 ```bat
 build.bat
-git tag v0.4.0 && git push origin v0.4.0
-gh release create v0.4.0 dist\ForestCraft-0.4.0.zip --title "ForestCraft 0.4.0" --notes-file dist\notes.md
+git tag v0.4.1 && git push origin v0.4.1
+gh release create v0.4.1 dist\ForestCraft-0.4.1.zip --title "ForestCraft 0.4.1" --notes-file dist\notes.md
 ```
 
 ## License

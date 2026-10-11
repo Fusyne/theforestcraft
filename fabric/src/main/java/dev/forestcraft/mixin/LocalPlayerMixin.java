@@ -14,8 +14,8 @@ public abstract class LocalPlayerMixin {
 		LocalPlayer player = (LocalPlayer) (Object) this;
 		ForestLink.refreshGrid();
 		ForestLink.stepUp(player);
-		// xo/yo/zo is where this tick started: The Forest lerps from there to here, like MC's own renderer.
-		ForestLink.publishPlayer(player.xo, player.yo, player.zo, player.getX(), player.getY(), player.getZ(),
-			player.getYRot(), player.getXRot(), player.onGround(), ForestLink.teleportAck());
+		// Riding (a boat...): the vehicle places the player only after this tick, in rideTick.
+		if (player.isPassenger()) return;
+		ForestLink.publishPlayer(player);
 	}
 }
